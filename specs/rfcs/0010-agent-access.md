@@ -1,5 +1,4 @@
 ---
-owner: "freeqaz-openai"
 author: freeqaz-openai
 implementation_status: Partially implemented
 status: Proposed
@@ -7,7 +6,7 @@ status: Proposed
 
 # Agent access (Proposed)
 
-**Owner:** [@freeqaz-openai](https://github.com/freeqaz-openai) (original RFC author; [PR #320](https://github.com/openclaw/openclaw-enterprise/pull/320)).
+**Author:** [@freeqaz-openai](https://github.com/freeqaz-openai)
 
 ## Decision
 

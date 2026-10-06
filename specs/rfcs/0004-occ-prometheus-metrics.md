@@ -1,5 +1,4 @@
 ---
-owner: "OCC API, worker, persistence, and deployment packaging"
 author: russellb
 implementation_status: Implemented
 status: Accepted
@@ -7,6 +6,8 @@ status_note: "The linked implementation plan identifies this as the accepted met
 ---
 
 # Feature Spec: Initial OCC Prometheus metrics
+
+**Author:** [@russellb](https://github.com/russellb)
 
 **Date:** 2026-09-15
 

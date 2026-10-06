@@ -1,11 +1,12 @@
 ---
-owner: "OCC and Compute/Sandbox Driver maintainers"
 author: kevinlin-openai
 implementation_status: Not implemented
 status: Proposed
 ---
 
 # Feature Spec: Agent workload tags
+
+**Author:** [@kevinlin-openai](https://github.com/kevinlin-openai)
 
 **Date:** 2026-09-03
 **Status:** Planning — draft awaiting review and user direction

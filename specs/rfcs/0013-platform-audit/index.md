@@ -1,5 +1,4 @@
 ---
-owner: "freeqaz-openai"
 author: freeqaz-openai
 implementation_status: Not implemented
 status: Proposed
@@ -7,7 +6,7 @@ status: Proposed
 
 # RFC: Platform audit
 
-**Owner:** [@freeqaz-openai](https://github.com/freeqaz-openai) (original RFC author; [PR #376](https://github.com/openclaw/openclaw-enterprise/pull/376)).
+**Author:** [@freeqaz-openai](https://github.com/freeqaz-openai)
 
 ## Problem and decision
 

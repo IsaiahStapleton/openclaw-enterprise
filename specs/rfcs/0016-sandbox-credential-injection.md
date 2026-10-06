@@ -1,5 +1,4 @@
 ---
-owner: "Driver contracts, Agent deployment, and the OpenShell integration"
 author: mrunalp
 implementation_status: Partially implemented
 status: Proposed
@@ -7,6 +6,8 @@ status_note: "The first slice shipped; the remaining proposal is explicitly not 
 ---
 
 # RFC: Credential Gateway Driver for Sandbox-injected credentials
+
+**Author:** [@mrunalp](https://github.com/mrunalp)
 
 **Date:** 2026-09-26
 **Status:** Implementing; the first slice shipped in

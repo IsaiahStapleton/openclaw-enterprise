@@ -1,5 +1,4 @@
 ---
-owner: "freeqaz-openai"
 author: freeqaz-openai
 implementation_status: Partially implemented
 status: Unspecified
@@ -8,7 +7,7 @@ status_note: "The record gives the 0.x direction; explicit acceptance applies to
 
 # Agent egress for 0.x
 
-**Owner:** [@freeqaz-openai](https://github.com/freeqaz-openai) (original RFC author; [PR #249](https://github.com/openclaw/openclaw-enterprise/pull/249)).
+**Author:** [@freeqaz-openai](https://github.com/freeqaz-openai)
 
 <a id="current-disposition"></a>
 

@@ -33,12 +33,10 @@ skill assets. If companions are needed, write the main document at
 When converting an existing single file, preserve its ID and content and update
 all incoming and relative links; do not leave a top-level duplicate.
 Start the file with YAML frontmatter containing `status: Proposed`,
-`implementation_status: Not implemented`, the required `author` GitHub login,
-and `owner` person or team, as defined in the specification process.
-Preserve a recorded owner or fall back
-to the verified original RFC author. Show that owner near the title and identify
-an author fallback. Companion Markdown notes use an `rfc` frontmatter link to
-the main document and inherit
+`implementation_status: Not implemented`, and the required `author` GitHub login,
+as defined in the specification process. Treat the author as the RFC owner,
+show the same author near the title, and do not add a separate owner field. Companion
+Markdown notes use an `rfc` frontmatter link to the main document and inherit
 its decision status; do not duplicate the status in companions. When adding
 metadata to historical RFCs, use recorded decision evidence. If no decision is
 established, use `status: Unspecified` with a `status_note` explaining the gap,
@@ -69,9 +67,8 @@ policy and actual decision evidence.
   relative, and verify their paths and any referenced heading anchors.
 - Add or update the RFC’s row in `specs/README.md`, showing its linked number
   and name in the first column, `implementation_status` in the second,
-  evidence or remaining gaps in the third, and the owner in the fourth.
-  Keep the row synchronized when the name, implementation status, or owner
-  changes. Link the RFC and plan
+  evidence or remaining gaps in the third, and the author in the fourth. Keep the row synchronized when the
+  name, implementation status, or author changes. Link the RFC and plan
   to each other when both exist.
 - Check the document against current source, scope, alternatives, failure
   behavior, and required outcomes. Apply the technical-writing clarity pass.

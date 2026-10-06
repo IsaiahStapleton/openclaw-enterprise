@@ -1,11 +1,12 @@
 ---
-owner: "rclarke0"
 author: rclarke0
 implementation_status: Implemented
 status: Proposed
 ---
 
 # Proposal: Generic OIDC sign-in for existing accounts
+
+**Author:** [@rclarke0](https://github.com/rclarke0)
 
 - **ID:** RFC-0001
 - **Owner:** rclarke0 (proposal). Auth design review: freeqaz. Scope and release: kevinlin-openai.

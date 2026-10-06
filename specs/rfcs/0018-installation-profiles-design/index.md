@@ -1,11 +1,12 @@
 ---
-owner: "Enterprise installation packaging"
 author: kevinlin-openai
 implementation_status: Implemented
 status: Accepted
 ---
 
 # Installation profiles: openclaw and codex
+
+**Author:** [@kevinlin-openai](https://github.com/kevinlin-openai)
 
 **Date:** 2026-09-28
 

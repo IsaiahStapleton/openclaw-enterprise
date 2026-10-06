@@ -1,5 +1,4 @@
 ---
-owner: "OCC authorization and Agent invocation"
 author: freeqaz-openai
 implementation_status: Not implemented
 status: Proposed
@@ -7,6 +6,8 @@ status_note: "Deferred past 0.x; retained as direction, not an accepted release 
 ---
 
 # RFC: Basic RBAC for personal and team Agents
+
+**Author:** [@freeqaz-openai](https://github.com/freeqaz-openai)
 
 **Date:** 2026-09-18
 

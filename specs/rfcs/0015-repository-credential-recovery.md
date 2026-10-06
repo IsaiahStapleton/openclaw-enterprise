@@ -1,5 +1,4 @@
 ---
-owner: "kevinlin-openai"
 author: kevinlin-openai
 implementation_status: Partially implemented
 status: Proposed
@@ -8,7 +7,7 @@ status_note: "The incremental implementation is under review; the broader recove
 
 # Recover repository credential cleanup after broker loss
 
-**Owner:** [@kevinlin-openai](https://github.com/kevinlin-openai) (original RFC author; [PR #534](https://github.com/openclaw/openclaw-enterprise/pull/534)).
+**Author:** [@kevinlin-openai](https://github.com/kevinlin-openai)
 
 **Status: Implementing.** The incremental terminal-receipt path is under review;
 the broader action-recovery design remains proposed. The current

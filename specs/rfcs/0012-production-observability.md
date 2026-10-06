@@ -1,5 +1,4 @@
 ---
-owner: "russellb"
 author: russellb
 implementation_status: Implemented
 status: Unspecified
@@ -8,7 +7,7 @@ status_note: "The record reports local implementation and qualification, not an 
 
 # Default production observability
 
-**Owner:** [@russellb](https://github.com/russellb) (original RFC author; [PR #380](https://github.com/openclaw/openclaw-enterprise/pull/380)).
+**Author:** [@russellb](https://github.com/russellb)
 
 Status: Implemented locally on 2026-09-23; default k3d acceptance passed.
 See the [qualification report](../plans/36-production-observability/qualification.md)

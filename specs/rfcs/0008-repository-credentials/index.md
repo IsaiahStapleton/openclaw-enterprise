@@ -1,5 +1,4 @@
 ---
-owner: "Repository Driver/service, OCC/State, worker and Compute maintainers"
 author: freeqaz-openai
 implementation_status: Implemented
 status: Unspecified
@@ -7,6 +6,8 @@ status_note: "The record selects interface refinements and records implementatio
 ---
 
 # RFC: Repository credentials for ordinary Agents
+
+**Author:** [@freeqaz-openai](https://github.com/freeqaz-openai)
 
 **Status:** Selected interface and ownership refinement. Source behavior, historical qualification and final-artifact acceptance are distinguished below.
 **Owners:** Repository Driver/service, OCC/State, worker and Compute maintainers.

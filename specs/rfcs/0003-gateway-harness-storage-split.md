@@ -1,5 +1,4 @@
 ---
-owner: "Kimiyu-186"
 author: Kimiyu-186
 implementation_status: Implemented
 status: Proposed
@@ -8,7 +7,7 @@ status_note: "Recorded as proposed; the Memory and Skills placement is supersede
 
 # Gateway–Harness storage split
 
-**Owner:** [@Kimiyu-186](https://github.com/Kimiyu-186) (original RFC author; [PR #171](https://github.com/openclaw/openclaw-enterprise/pull/171)).
+**Author:** [@Kimiyu-186](https://github.com/Kimiyu-186)
 
 > **Memory and Skills placement is superseded by [spec30](../plans/30-storage-split-integration.md).**
 > The current proposal keeps the Memory index on Gateway; the original design below is preserved as history.

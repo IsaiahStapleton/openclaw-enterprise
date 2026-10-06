@@ -1,5 +1,4 @@
 ---
-owner: "RomneyDa"
 author: RomneyDa
 implementation_status: Implemented
 status: Proposed
@@ -7,7 +6,7 @@ status: Proposed
 
 # Independent production image upgrades
 
-**Owner:** [@RomneyDa](https://github.com/RomneyDa) (original RFC author; [PR #332](https://github.com/openclaw/openclaw-enterprise/pull/332)).
+**Author:** [@RomneyDa](https://github.com/RomneyDa)
 
 Status: Proposed. This specification selects the first production upgrade
 workflow for review; it does not describe behavior available on `main`.

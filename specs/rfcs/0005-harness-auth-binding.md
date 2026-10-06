@@ -1,5 +1,4 @@
 ---
-owner: "OCC admission and harness runtime integration"
 author: kevinlin-openai
 implementation_status: Implemented
 status: Proposed
@@ -7,6 +6,8 @@ status_note: "Original proposal status retained; later delivery evidence and an 
 ---
 
 # RFC: Harness authentication bindings
+
+**Author:** [@kevinlin-openai](https://github.com/kevinlin-openai)
 
 **Date:** 2026-09-16
 **Status:** Proposed; not implemented or approved.
