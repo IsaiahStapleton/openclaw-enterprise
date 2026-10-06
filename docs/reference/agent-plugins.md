@@ -332,7 +332,7 @@ native review trigger; explicit tool overrides do not need catalog annotations.
   `/plugins/<id>` detail when the selection came from this request's body. A
   selection read back from storage (at deploy, at an update that omits
   `plugins`, or at a provisioning replay or retry) still names the plugin but
-  has no detail. A provisioning status read does not recheck plugins, so it
+  has no detail. A provisioning status read does not recheck the plugin policy, so it
   still reports the work after a Plugin Driver switch.
 - `403`: denied exact-Agent permission.
 - `404`: missing or foreign Agent or Configuration.

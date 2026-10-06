@@ -2072,6 +2072,7 @@ export class OpenClawController {
           "Provisioning cannot retry after cancellation or deployment handoff.",
         );
       }
+      // Full admission, including the plugin policy that the status read skips.
       await this.authorizeProvisioningRecord(state, principalId, record);
       if (record.status === "queued" || record.status === "running") {
         return Object.freeze({ provisioning: provisioningProgress(record, observed) });

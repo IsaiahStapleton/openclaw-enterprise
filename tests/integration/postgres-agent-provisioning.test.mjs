@@ -1493,6 +1493,7 @@ test(
       },
     );
     await fixture.stopWorker();
+    // Rule out the Configuration outage as the cause of the retry refusal below.
     configurationOutage = false;
 
     // The administrator restarts the API with a Plugin Driver that does not offer the stored
