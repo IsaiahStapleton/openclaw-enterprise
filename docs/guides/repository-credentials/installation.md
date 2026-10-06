@@ -253,8 +253,9 @@ kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n openclaw-system 
 Expect one worker Pod containing worker and credential-service containers, a
 `Recreate` deployment, and the internal HTTPS Service. The API mounts only the
 registry and public CA; the worker additionally mounts the private control
-socket; App/TLS private inputs stay in the service container. Kubernetes API
-service-account token projection is worker-only. Confirm those mounts from the
+socket; App/TLS private inputs stay in the service container. In the worker
+Pod, only the worker container receives a Kubernetes API service-account token;
+the credential-service container gets none. Confirm those mounts from the
 rendered manifests before deploying an Agent.
 
 A ready sidecar confirms protected startup and the control listener. Continue
