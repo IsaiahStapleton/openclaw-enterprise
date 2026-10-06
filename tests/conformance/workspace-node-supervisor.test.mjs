@@ -9,6 +9,97 @@ import { setTimeout as delay } from "node:timers/promises";
 import { AGENT_WITH_NODE_ENTRYPOINT } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
 import { nodeProgramArguments } from "../../apps/controller/src/drivers/compute/node-program.ts";
 
+// Reads a JSON-lines file; a file that does not exist yet has no rows.
+async function jsonLines(path) {
+  const contents = await readFile(path, "utf8").catch((error) => {
+    if (error.code === "ENOENT") {
+      return "";
+    }
+    throw error;
+  });
+  return contents
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+// Runs the supervisor program the container receives; supervision, signals and
+// environments run unchanged.
+// - Stubbed: native initialization (the runtime-image test covers it), and every child
+//   the supervisor spawns, which runs `child` (the lines of child.cjs) with the events
+//   path, "node" or "codex", and its JSON arguments. `stubs` are extra program lines
+//   that replace other external bodies.
+// - Events: children append JSON rows to `directory`/events.jsonl.
+// - Cleanup kills the supervisor and every recorded pid, then removes `directory`.
+async function startSupervisor(t, directory, { child, stubs = [], env }) {
+  const eventsPath = join(directory, "events.jsonl");
+  const childPath = join(directory, "child.cjs");
+  await writeFile(childPath, child.join("\n"));
+  const launch = [
+    'const cp = require("node:child_process"); const realSpawn = cp.spawn;',
+    "cp.spawnSync = () => ({ status: 0 });",
+    "cp.spawn = (command, args, options) => realSpawn(command, [" +
+      JSON.stringify(childPath) +
+      ", " +
+      JSON.stringify(eventsPath) +
+      ', args[0] === "/app/openclaw.mjs" ? "node" : "codex", JSON.stringify(args)], options);',
+    ...stubs,
+    AGENT_WITH_NODE_ENTRYPOINT.replace(
+      "\ninitializeRuntimeAssets();\npublishAgentPluginSkillPath();\n",
+      "\n",
+    ),
+  ].join("\n");
+  // Launch through the same bounded program pieces the container receives.
+  const supervisor = spawn(process.execPath, ["-e", ...nodeProgramArguments(launch)], {
+    env: {
+      PATH: process.env.PATH,
+      HOME: directory,
+      OPENCLAW_NODE_STATE_DIR: join(directory, "node-state"),
+      OPENCLAW_WORKSPACE_DIR: join(directory, "workspace"),
+      ...env,
+    },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  let output = "";
+  supervisor.stderr.on("data", (chunk) => {
+    output += chunk;
+  });
+  const exited = once(supervisor, "exit");
+  const events = () => jsonLines(eventsPath);
+  t.after(async () => {
+    supervisor.kill("SIGTERM");
+    await exited;
+    for (const { pid } of await events()) {
+      if (pid === undefined) {
+        continue;
+      }
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (error) {
+        if (error.code !== "ESRCH") {
+          throw error;
+        }
+      }
+    }
+    await rm(directory, { recursive: true, force: true });
+  });
+  // Polls `read` (the events by default) until `predicate` accepts the rows, failing at
+  // once if the supervisor exits.
+  const waitFor = async (description, predicate, read = events) => {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const observed = await read();
+      if (await predicate(observed)) {
+        return observed;
+      }
+      assert.equal(supervisor.exitCode, null, output);
+      await delay(25);
+    }
+    assert.fail(description + ": " + output);
+  };
+  return { supervisor, exited, events, waitFor, output: () => output };
+}
+
 // This proves process supervision with real child processes. It does not prove
 // native pairing, Codex startup or container integration.
 test(
@@ -21,8 +112,6 @@ test(
   },
   async (t) => {
     const directory = await mkdtemp(join(tmpdir(), "oce-node-supervisor-"));
-    const eventsPath = join(directory, "events.jsonl");
-    const childPath = join(directory, "child.cjs");
     const setupEnvelopePath = join(directory, "node-setup.json");
     await writeFile(
       setupEnvelopePath,
@@ -32,9 +121,8 @@ test(
         expiresAtMs: Date.now() + 60_000,
       }),
     );
-    await writeFile(
-      childPath,
-      [
+    const { supervisor, exited, events, waitFor, output } = await startSupervisor(t, directory, {
+      child: [
         'const { appendFileSync } = require("node:fs");',
         'const { spawn } = require("node:child_process");',
         "const [events, kind, args] = process.argv.slice(2);",
@@ -46,81 +134,13 @@ test(
         'hasTransportToken: process.env.APP_SERVER_TOKEN !== undefined }) + "\\n");',
         'if (kind === "codex") spawn(process.execPath, [__filename, events, "grandchild"], { stdio: "inherit" });',
         "setInterval(() => {}, 1_000);",
-      ].join("\n"),
-    );
-    // Native initialization is covered by the runtime-image test. Substitute it
-    // and external executable bodies; supervision, signals and environments run unchanged.
-    const launch = [
-      'const cp = require("node:child_process"); const realSpawn = cp.spawn;',
-      // Native workspace initialization is covered by the runtime image test.
-      "cp.spawnSync = () => ({ status: 0 });",
-      "cp.spawn = (command, args, options) => realSpawn(command, [" +
-        JSON.stringify(childPath) +
-        ", " +
-        JSON.stringify(eventsPath) +
-        ", " +
-        'args[0] === "/app/openclaw.mjs" ? "node" : "codex", JSON.stringify(args)], options);',
-      AGENT_WITH_NODE_ENTRYPOINT.replace(
-        "\ninitializeRuntimeAssets();\npublishAgentPluginSkillPath();\n",
-        "\n",
-      ),
-    ].join("\n");
-    // Launch through the same bounded program pieces the container receives.
-    const supervisor = spawn(process.execPath, ["-e", ...nodeProgramArguments(launch)], {
+      ],
       env: {
-        PATH: process.env.PATH,
-        HOME: directory,
-        OPENCLAW_NODE_STATE_DIR: join(directory, "node-state"),
         OPENCLAW_NODE_SETUP_ENVELOPE: setupEnvelopePath,
-        OPENCLAW_WORKSPACE_DIR: join(directory, "workspace"),
         OPENAI_API_KEY: "synthetic-model-key",
         APP_SERVER_TOKEN: "synthetic-transport-token",
       },
-      stdio: ["ignore", "ignore", "pipe"],
     });
-    let output = "";
-    supervisor.stderr.on("data", (chunk) => {
-      output += chunk;
-    });
-    const exited = once(supervisor, "exit");
-    const events = async () => {
-      const contents = await readFile(eventsPath, "utf8").catch((error) => {
-        if (error.code === "ENOENT") {
-          return "";
-        }
-        throw error;
-      });
-      return contents
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => JSON.parse(line));
-    };
-    t.after(async () => {
-      supervisor.kill("SIGTERM");
-      await exited;
-      for (const { pid } of await events()) {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch (error) {
-          if (error.code !== "ESRCH") {
-            throw error;
-          }
-        }
-      }
-      await rm(directory, { recursive: true, force: true });
-    });
-    const waitFor = async (description, predicate) => {
-      const deadline = Date.now() + 5_000;
-      while (Date.now() < deadline) {
-        const observed = await events();
-        if (await predicate(observed)) {
-          return observed;
-        }
-        assert.equal(supervisor.exitCode, null, output);
-        await delay(25);
-      }
-      assert.fail(description + ": " + output);
-    };
     const initial = await waitFor(
       "children started",
       (rows) =>
@@ -187,7 +207,7 @@ test(
       Buffer.from(JSON.stringify(renewedSetup)).toString("base64url"),
     );
     supervisor.kill("SIGTERM");
-    assert.deepEqual(await exited, [0, null], output);
+    assert.deepEqual(await exited, [0, null], output());
     for (const { pid } of await events()) {
       assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
     }
@@ -205,105 +225,40 @@ test(
   },
   async (t) => {
     const directory = await mkdtemp(join(tmpdir(), "oce-node-setup-file-"));
-    const eventsPath = join(directory, "events.jsonl");
-    const childPath = join(directory, "child.cjs");
     const setupDirectory = join(directory, "setup");
     const setupPath = join(setupDirectory, "setup-code");
     const setupReadsPath = join(directory, "setup-reads.jsonl");
     const identityPath = join(directory, "identity.json");
-    await writeFile(
-      childPath,
-      [
+    // Substitute the saved-identity lookup as well; the supervisor's setup polling and
+    // restarts run unchanged.
+    const { supervisor, exited, events, waitFor, output } = await startSupervisor(t, directory, {
+      child: [
         'const { appendFileSync } = require("node:fs");',
         "const [events, kind, args] = process.argv.slice(2);",
         "appendFileSync(events, JSON.stringify({ kind, pid: process.pid, args: JSON.parse(args),",
         "hasSetupPath: process.env.OPENCLAW_NODE_SETUP_PATH !== undefined,",
         "hasDisplayName: process.env.OPENCLAW_NODE_DISPLAY_NAME !== undefined }) + '\\n');",
         "setInterval(() => {}, 1_000);",
-      ].join("\n"),
-    );
-    // Substitute native initialization, the child bodies and the saved-identity
-    // lookup; the supervisor's setup polling and restarts run unchanged.
-    const launch = [
-      'const cp = require("node:child_process"); const realSpawn = cp.spawn;',
-      "cp.spawnSync = () => ({ status: 0 });",
-      "cp.execFile = (file, args, options, callback) => {",
-      `  try { callback(null, require("node:fs").readFileSync(${JSON.stringify(identityPath)}, "utf8")); }`,
-      '  catch (error) { callback(error, ""); }',
-      "};",
-      "cp.spawn = (command, args, options) => realSpawn(command, [" +
-        JSON.stringify(childPath) +
-        ", " +
-        JSON.stringify(eventsPath) +
-        ', args[0] === "/app/openclaw.mjs" ? "node" : "codex", JSON.stringify(args)], options);',
-      // Record each setup poll and what it read, so the test waits for polls.
-      'const fs = require("node:fs"); const realRead = fs.readFileSync;',
-      "fs.readFileSync = (path, ...rest) => {",
-      `  if (path !== ${JSON.stringify(setupPath)}) return realRead(path, ...rest);`,
-      "  let content = null;",
-      "  try { content = realRead(path, ...rest); return content; }",
-      `  finally { fs.appendFileSync(${JSON.stringify(setupReadsPath)}, JSON.stringify({ content }) + "\\n"); }`,
-      "};",
-      AGENT_WITH_NODE_ENTRYPOINT.replace(
-        "\ninitializeRuntimeAssets();\npublishAgentPluginSkillPath();\n",
-        "\n",
-      ),
-    ].join("\n");
-    const supervisor = spawn(process.execPath, ["-e", ...nodeProgramArguments(launch)], {
+      ],
+      stubs: [
+        "cp.execFile = (file, args, options, callback) => {",
+        `  try { callback(null, require("node:fs").readFileSync(${JSON.stringify(identityPath)}, "utf8")); }`,
+        '  catch (error) { callback(error, ""); }',
+        "};",
+        // Record each setup poll and what it read, so the test waits for polls.
+        'const fs = require("node:fs"); const realRead = fs.readFileSync;',
+        "fs.readFileSync = (path, ...rest) => {",
+        `  if (path !== ${JSON.stringify(setupPath)}) return realRead(path, ...rest);`,
+        "  let content = null;",
+        "  try { content = realRead(path, ...rest); return content; }",
+        `  finally { fs.appendFileSync(${JSON.stringify(setupReadsPath)}, JSON.stringify({ content }) + "\\n"); }`,
+        "};",
+      ],
       env: {
-        PATH: process.env.PATH,
-        HOME: directory,
-        OPENCLAW_NODE_STATE_DIR: join(directory, "node-state"),
         OPENCLAW_NODE_SETUP_PATH: setupPath,
-        OPENCLAW_WORKSPACE_DIR: join(directory, "workspace"),
         OPENCLAW_NODE_DISPLAY_NAME: "agent-0123456789ab-workspace",
       },
-      stdio: ["ignore", "ignore", "pipe"],
     });
-    let output = "";
-    supervisor.stderr.on("data", (chunk) => {
-      output += chunk;
-    });
-    const exited = once(supervisor, "exit");
-    const jsonLines = async (path) => {
-      const contents = await readFile(path, "utf8").catch((error) => {
-        if (error.code === "ENOENT") {
-          return "";
-        }
-        throw error;
-      });
-      return contents
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => JSON.parse(line));
-    };
-    const events = () => jsonLines(eventsPath);
-    t.after(async () => {
-      supervisor.kill("SIGTERM");
-      await exited;
-      for (const { pid } of await events()) {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch (error) {
-          if (error.code !== "ESRCH") {
-            throw error;
-          }
-        }
-      }
-      await rm(directory, { recursive: true, force: true });
-    });
-    const waitFor = async (description, predicate, read = events) => {
-      const deadline = Date.now() + 5_000;
-      while (Date.now() < deadline) {
-        const observed = await read();
-        if (predicate(observed)) {
-          return observed;
-        }
-        assert.equal(supervisor.exitCode, null, output);
-        await delay(25);
-      }
-      assert.fail(description + ": " + output);
-    };
     const nodes = (rows) => rows.filter(({ kind }) => kind === "node");
     // The supervisor polls the setup file until it starts a node. A poll that read
     // `content` followed by another poll proves that content started no node.
@@ -367,7 +322,7 @@ test(
     assert.equal((await events()).filter(({ kind }) => kind === "codex").length, 1);
 
     supervisor.kill("SIGTERM");
-    assert.deepEqual(await exited, [0, null], output);
+    assert.deepEqual(await exited, [0, null], output());
   },
 );
 
@@ -382,88 +337,31 @@ test(
   },
   async (t) => {
     const directory = await mkdtemp(join(tmpdir(), "oce-node-identity-retry-"));
-    const eventsPath = join(directory, "events.jsonl");
-    const childPath = join(directory, "child.cjs");
-    await writeFile(
-      childPath,
-      [
+    // The saved identity exists throughout; only the first probe fails.
+    const { supervisor, exited, events, output } = await startSupervisor(t, directory, {
+      child: [
         'const { appendFileSync } = require("node:fs");',
         "const [events, kind, args] = process.argv.slice(2);",
         "appendFileSync(events, JSON.stringify({ kind, pid: process.pid, args: JSON.parse(args) }) + '\\n');",
         "setInterval(() => {}, 1_000);",
-      ].join("\n"),
-    );
-    // The saved identity exists throughout; only the first probe fails.
-    const launch = [
-      'const cp = require("node:child_process"); const realSpawn = cp.spawn;',
-      'const { appendFileSync } = require("node:fs");',
-      "cp.spawnSync = () => ({ status: 0 });",
-      "let probes = 0;",
-      "cp.execFile = (file, args, options, callback) => {",
-      "  probes += 1;",
-      `  appendFileSync(${JSON.stringify(eventsPath)}, JSON.stringify({ kind: "probe", attempt: probes }) + "\\n");`,
-      '  if (probes === 1) { setImmediate(() => callback(Object.assign(new Error("timed out"), { killed: true }), "")); return; }',
-      `  setImmediate(() => callback(null, JSON.stringify({ deviceId: ${JSON.stringify("b".repeat(64))} })));`,
-      "};",
-      "cp.spawn = (command, args, options) => realSpawn(command, [" +
-        JSON.stringify(childPath) +
-        ", " +
-        JSON.stringify(eventsPath) +
-        ', args[0] === "/app/openclaw.mjs" ? "node" : "codex", JSON.stringify(args)], options);',
-      AGENT_WITH_NODE_ENTRYPOINT.replace(
-        "\ninitializeRuntimeAssets();\npublishAgentPluginSkillPath();\n",
-        "\n",
-      ),
-    ].join("\n");
-    const supervisor = spawn(process.execPath, ["-e", ...nodeProgramArguments(launch)], {
-      env: {
-        PATH: process.env.PATH,
-        HOME: directory,
-        OPENCLAW_NODE_STATE_DIR: join(directory, "node-state"),
-        OPENCLAW_NODE_SETUP_PATH: join(directory, "setup", "setup-code"),
-        OPENCLAW_WORKSPACE_DIR: join(directory, "workspace"),
-      },
-      stdio: ["ignore", "ignore", "pipe"],
-    });
-    let output = "";
-    supervisor.stderr.on("data", (chunk) => {
-      output += chunk;
-    });
-    const exited = once(supervisor, "exit");
-    const events = async () => {
-      const contents = await readFile(eventsPath, "utf8").catch((error) => {
-        if (error.code === "ENOENT") {
-          return "";
-        }
-        throw error;
-      });
-      return contents
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => JSON.parse(line));
-    };
-    t.after(async () => {
-      supervisor.kill("SIGTERM");
-      await exited;
-      for (const { pid } of await events()) {
-        if (pid === undefined) {
-          continue;
-        }
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch (error) {
-          if (error.code !== "ESRCH") {
-            throw error;
-          }
-        }
-      }
-      await rm(directory, { recursive: true, force: true });
+      ],
+      stubs: [
+        'const { appendFileSync } = require("node:fs");',
+        "let probes = 0;",
+        "cp.execFile = (file, args, options, callback) => {",
+        "  probes += 1;",
+        `  appendFileSync(${JSON.stringify(join(directory, "events.jsonl"))}, JSON.stringify({ kind: "probe", attempt: probes }) + "\\n");`,
+        '  if (probes === 1) { setImmediate(() => callback(Object.assign(new Error("timed out"), { killed: true }), "")); return; }',
+        `  setImmediate(() => callback(null, JSON.stringify({ deviceId: ${JSON.stringify("b".repeat(64))} })));`,
+        "};",
+      ],
+      env: { OPENCLAW_NODE_SETUP_PATH: join(directory, "setup", "setup-code") },
     });
     const deadline = Date.now() + 8_000;
     let rows = [];
     while (!rows.some(({ kind }) => kind === "node")) {
-      assert.ok(Date.now() < deadline, "node never started after a failed probe: " + output);
-      assert.equal(supervisor.exitCode, null, output);
+      assert.ok(Date.now() < deadline, "node never started after a failed probe: " + output());
+      assert.equal(supervisor.exitCode, null, output());
       await delay(50);
       rows = await events();
     }
@@ -475,6 +373,6 @@ test(
     assert.equal(rows.filter(({ kind }) => kind === "codex").length, 1);
 
     supervisor.kill("SIGTERM");
-    assert.deepEqual(await exited, [0, null], output);
+    assert.deepEqual(await exited, [0, null], output());
   },
 );
