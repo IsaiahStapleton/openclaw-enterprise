@@ -75,12 +75,12 @@ Revision read access must also cover the replacement revisions.
 Review saved Agent and Configuration drafts before a runtime upgrade. Each
 deployment snapshots the current draft, not the previous active revision.
 
-Restarting the repository broker loses delivered sessions. Before a release,
+A controller-only release does not deploy Agents. Restarting the repository
+broker loses delivered sessions. Before a release,
 plan interruption and authorized replacement revisions for affected Agents;
 review their drafts and deploy grants. Stop if recovery cannot be performed
 safely. A lost delivered session fails its revision and queues retirement;
-inspect its retained cleanup. A controller-only release does not request
-replacements. Follow the
+inspect its retained cleanup. Follow the
 [broker recovery procedure](../repository-credentials/installation.md#install-and-verify).
 
 Stop other Helm changes until the command completes. Disable autoscalers and
@@ -152,9 +152,8 @@ Add either or both flags to any upgrade command below:
 The helper saves the reviewed inputs in its private evidence, applies the image
 selections and preserved broker endpoint, and writes the final candidate to the
 baseline paths during the upgrade. An Installation change also updates its
-Secret and restarts OCC with the new checksum. A controller-only release still
-does not deploy Agents; plan any Agent changes separately. Keep candidate files
-unchanged and available at the same paths for recovery.
+Secret and restarts OCC with the new checksum. Keep candidate files unchanged
+and available at the same paths for recovery.
 
 ### Apply other Installation changes
 
@@ -285,8 +284,8 @@ its initialization hooks succeed. The helper verifies rollout and OCC access.
 Helm runs the candidate controller's database migration init container with the
 migration role, then runs bootstrap. The API and worker do not roll out unless
 both hooks succeed. The command does not request fleet inventory or Agent
-deployment authority. A replacement revision snapshots the current draft; it
-does not settle old cleanup or replay repository operations.
+deployment authority. A later replacement revision does not settle old cleanup
+or replay repository operations.
 
 For the first release that introduces `occ installation deployment-inventory`,
 verify that operation after the controller upgrade before attempting a runtime
@@ -297,9 +296,6 @@ Success looks like:
 ```text
 Upgraded controller image; no Agent deployments were requested.
 ```
-
-This result confirms the helper's rollout, not recovery of repository-bound
-Agents. Verify those Agents and their required repository operations separately.
 
 ## Upgrade Agent runtimes
 
@@ -321,9 +317,8 @@ scripts/upgrade-production-images \
   --occ /secure/occ/bin/occ
 ```
 
-When repository credentials are enabled, also pass `--controller-image` with
-the current controller digest and `--broker-image` with the selected broker
-digest. The worker and broker still restart during this release.
+When repository credentials are enabled, also pass `--controller-image` (current
+digest) and `--broker-image` (selected digest). The worker and broker still restart.
 
 Before mutation, the command requires a complete authorized inventory with no
 deployment in progress. Every running Agent must have a readable active revision
