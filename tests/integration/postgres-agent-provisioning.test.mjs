@@ -1891,6 +1891,11 @@ test(
       { state: "failed_permanent", reason_code: "PROVISIONING_REJECTED", attempt_count: 1 },
     ]);
 
+    // Status reports the stored failure without rechecking Harness authentication.
+    const status = await fixture.request("GET", admitted.data.provisioning.url);
+    assert.equal(status.status, 200, JSON.stringify(status.body));
+    assert.equal(status.data.status, "failed");
+    assert.deepEqual(status.data.error, failed.progress.error);
     // Retry runs the plan again and names the setting too.
     const retried = await fixture.request("POST", `${admitted.data.provisioning.url}/retry`);
     assert.equal(retried.status, 400, JSON.stringify(retried.body));
@@ -1898,17 +1903,19 @@ test(
       { code: retried.body.error.code, message: retried.body.error.message },
       { code: "INVALID_REQUEST", message: named },
     );
-    // Status still rechecks Harness authentication and keeps its fixed refusal.
-    const status = await fixture.request("GET", admitted.data.provisioning.url);
-    assert.equal(status.status, 409, JSON.stringify(status.body));
-    assert.equal(
-      status.body.error.message,
-      "The configured model, authentication, or channel bindings cannot be provisioned.",
+    // Any other Harness authentication refusal keeps the fixed 409.
+    computeDriver.validateHarnessAuth = () => {
+      throw new Error("Harness authentication is incompatible with the selected topology.");
+    };
+    const conflicted = await fixture.request("POST", `${admitted.data.provisioning.url}/retry`);
+    assert.equal(conflicted.status, 409, JSON.stringify(conflicted.body));
+    assert.deepEqual(
+      { code: conflicted.body.error.code, message: conflicted.body.error.message },
+      {
+        code: "RESOURCE_CONFLICT",
+        message: "The configured model, authentication, or channel bindings cannot be provisioned.",
+      },
     );
-    refusing = false;
-    const stored = await fixture.request("GET", admitted.data.provisioning.url);
-    assert.equal(stored.status, 200, JSON.stringify(stored.body));
-    assert.deepEqual(stored.data.error, failed.progress.error);
   },
 );
 

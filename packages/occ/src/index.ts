@@ -6939,18 +6939,27 @@ export class OpenClawController {
         "The Compute Driver cannot validate Harness authentication.",
       );
     }
-    try {
-      compute.validateHarnessAuth(harness, auth, configuration, plan.configuration.secretBindings);
-    } catch (error) {
-      // As in deployment, a Driver that names unsupported Configuration content the caller
-      // owns keeps that message on writes (a 400; the caller was authorized above). A status
-      // read keeps answering the fixed 409 for any refusal.
-      if (error instanceof ConfigurationHarnessError && !statusRead) {
-        throw error;
+    // Harness authentication is admission for writes (replay, retry, the worker), like the
+    // Compute plan check: a status read reports the stored work, including a failure that
+    // names the refused setting, after a Driver change makes the check refuse the plan.
+    if (!statusRead) {
+      try {
+        compute.validateHarnessAuth(
+          harness,
+          auth,
+          configuration,
+          plan.configuration.secretBindings,
+        );
+      } catch (error) {
+        // As in deployment, a Driver that names unsupported Configuration content the caller
+        // owns keeps that message (a 400; the caller was authorized above).
+        if (error instanceof ConfigurationHarnessError) {
+          throw error;
+        }
+        throw new ResourceStateConflictError(
+          "The configured model, authentication, or channel bindings cannot be provisioned.",
+        );
       }
-      throw new ResourceStateConflictError(
-        "The configured model, authentication, or channel bindings cannot be provisioned.",
-      );
     }
     // Plugin policy is admission for writes (replay, retry, the worker). A status read reports
     // the stored work, so an Installation Plugin Driver switch does not turn it into a 400.
