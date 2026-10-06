@@ -328,7 +328,8 @@ native review trigger; explicit tool overrides do not need catalog annotations.
 - `400`: invalid body or policy unsupported by the selected Driver. A plugin ID
   outside the selected Driver's catalog (OpenClaw) or its prefix and marketplace
   (Codex), such as `occ-plugin:diffs` while `codex-plugin` is selected, names
-  that Driver in the message.
+  that Driver and the rejected plugin ID in the message, with a
+  `/plugins/<id>` detail.
 - `403`: denied exact-Agent permission.
 - `404`: missing or foreign Agent or Configuration.
 - `409`: ordinary Agent conflict, such as duplicate name.

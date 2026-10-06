@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import pg from "pg";
-import { PostgresPlatformState } from "../../packages/occ/src/index.ts";
 import { hashLocalPassword } from "../../apps/controller/src/auth/index.ts";
 import { passwordFailureBudget } from "../../apps/controller/src/auth/admission.ts";
 import {
@@ -11,6 +10,7 @@ import {
   defaultInstallSettings,
   memoryLogger,
   onboardPasswordAccounts,
+  postgresSignInState,
 } from "../helpers/production-sign-in.mjs";
 import { databaseUrl, requiresPostgres } from "../helpers/postgres-database.mjs";
 import { assertSpentDeviceProofRefusal } from "../helpers/password-proof-refusal.mjs";
@@ -86,15 +86,9 @@ test(
   "password-only sign-in limits failures per client and email with a reserved administrator lane",
   requiresPostgres,
   async (t) => {
-    const pool = new pg.Pool({ connectionString: databaseUrl });
-    const state = new PostgresPlatformState(pool);
     let app;
     let plainApp;
-    t.after(async () => {
-      await app?.close();
-      await plainApp?.close();
-      await pool.end();
-    });
+    const { pool, state } = postgresSignInState(t, () => [app, plainApp]);
     const {
       admin,
       accounts: {
