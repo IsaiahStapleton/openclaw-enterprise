@@ -1663,6 +1663,10 @@ test("contract error details stay within the published path cap and name what a 
   const configuration = { kind: "agent", values: {} };
   const source = { kind: "secret", namespaceId: namespace.id, id: `sec_${randomUUID()}` };
   const longBinding = "K".repeat(600);
+  let deepValues = {};
+  for (let depth = 0; depth < 26; depth += 1) {
+    deepValues = { ["d".repeat(40)]: deepValues };
+  }
   const contract = "The request does not match the operation contract: body";
   const cases = [
     // A submitted field name too long for the 512-character detail path is cut, as the NUL
@@ -1682,6 +1686,18 @@ test("contract error details stay within the published path cap and name what a 
       { ...configuration, secretBindings: { [longBinding]: { source: "x" } } },
       "/secretBindings",
       "INVALID_TYPE",
+    ],
+    // Leading segments that end exactly at 512 characters all stay.
+    [
+      { ...configuration, secretBindings: { ["K".repeat(496)]: { source, extra: 1 } } },
+      `/secretBindings/${"K".repeat(496)}`,
+      "UNKNOWN_FIELD",
+    ],
+    // The Configuration check's depth limit names a capped path under long keys.
+    [
+      { kind: "agent", values: deepValues },
+      `/values${`/${"d".repeat(40)}`.repeat(12)}`,
+      "TOO_DEEP",
     ],
   ];
   for (const [body, path, code] of cases) {
