@@ -3993,7 +3993,7 @@ test(
       assert.match(
         exposition,
         new RegExp(
-          `occ_reconciliation_attempts_total\\{[^\\n]*work_kind="agent_stop"[^\\n]*outcome="${outcome}"[^\\n]*\\} 1`,
+          `occ_reconciliation_attempts_total\\{[^\\n]*work_kind="agent_stop"[^\\n]*outcome="${outcome}"[^\\n]*\\} 1(?:\\n|$)`,
         ),
       );
     }
@@ -7918,8 +7918,9 @@ for (const { label, failure, code, message } of [
     `a dependency still failing at the convergence deadline fails deployment with its own code (${label})`,
     requiresPostgres,
     async (context) => {
-      // The 2.5 s deadline fits only three to six passes on a loaded runner, so a
-      // one-attempt budget keeps "more passes than the attempt budget" clear of it.
+      // The 2.5 s deadline fits only four to six passes on a loaded runner, too close
+      // to the default budget of five; with one attempt, more passes than the budget
+      // means two.
       const fixture = await setup(context, { maxAttempts: 1 });
       const owner = await fixture.agent("dependency-down");
       const candidate = await fixture.revision(owner, 1);
