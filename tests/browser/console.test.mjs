@@ -338,6 +338,13 @@ test("console shows the external observability link only to Installation adminis
   // Navigating away before the sign-out request is answered aborts it, and the old session
   // then opens the Console again instead of the login form.
   await page.waitForURL(/\/console\/login$/);
+  // A settled answer kept for another session owner is never reused.
+  await page.evaluate((link) => {
+    globalThis.sessionStorage.setItem(
+      "occ.console.installationAccess",
+      JSON.stringify({ owner: '["usr_other","other-session"]', admin: true, url: link }),
+    );
+  }, url);
   // The shell renders before the probe is answered, so wait for the denial itself.
   const limitedProbe = page.waitForResponse(
     (response) => new URL(response.url()).pathname === "/observability",
