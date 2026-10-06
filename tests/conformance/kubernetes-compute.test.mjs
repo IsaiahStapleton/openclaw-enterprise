@@ -11693,13 +11693,14 @@ for (const embedded of [true, false]) {
   });
 }
 
-// Two more ways a private Secret write can end. A connection that breaks while the write is
+// More ways a private Secret write can end. A connection that breaks while the write is
 // sent (EPIPE, or ECONNABORTED for a socket the local kernel aborted) never got an answer
-// from the API server, so it is transient like a refused connection. An owner that cancels
-// the pass while the write is in flight gets its own cancellation back, as from every other
-// Kubernetes call, not the delivery error that would read as an unavailable dependency.
+// from the API server, so it is transient like a refused connection. A write still unanswered
+// at the request deadline is transient too, and diagnostics name the timeout. An owner that
+// cancels the pass while the write is in flight gets its own cancellation back, as from every
+// other Kubernetes call, not the delivery error that would read as an unavailable dependency.
 for (const embedded of [true, false]) {
-  test(`Kubernetes ${embedded ? "embedded" : "dedicated"} private Secret writes keep broken connections transient and cancellations intact`, async () => {
+  test(`Kubernetes ${embedded ? "embedded" : "dedicated"} private Secret writes keep broken connections and timeouts transient and cancellations intact`, async (context) => {
     const targets = [
       { name: /^(harness|gateway)-secrets-/u, stage: "harness_auth" },
       { name: /^workspace-setup-/u, stage: "workspace_setup" },
@@ -11732,6 +11733,41 @@ for (const embedded of [true, false]) {
           stage: target.stage,
           errorClass: "KubernetesApiUnavailableError",
           message: "The Kubernetes API server is unreachable.",
+        });
+      }
+
+      {
+        const fixture = workspaceSetupFixture(embedded);
+        const clients = await fixture.driver.apiClients;
+        const create = clients.core.createNamespacedSecret;
+        // request() makes its deadline right before it calls the write, so the latest
+        // AbortSignal.timeout is this write's deadline; the write lets it lapse while in flight.
+        let deadline;
+        const timeout = context.mock.method(AbortSignal, "timeout", () => {
+          deadline = new AbortController();
+          return deadline.signal;
+        });
+        clients.core.createNamespacedSecret = async (request) => {
+          if (!target.name.test(request.body.metadata.name)) {
+            return create(request);
+          }
+          deadline.abort(new DOMException("The operation timed out.", "TimeoutError"));
+          throw deadline.signal.reason;
+        };
+        const error = await fixture.driver.prepareRevision(fixture.revision, fixture.context).then(
+          () => assert.fail("the private Secret write must fail"),
+          (failure) => failure,
+        );
+        timeout.mock.restore();
+        assert.equal(error.name, "TransientDependencyError");
+        assert.equal(error.code, "KUBERNETES_API_UNAVAILABLE");
+        assert.equal(error.reason, "timeout");
+        assert.equal(error.cause.cause, undefined);
+        assert.deepEqual(fixture.driver.describePrepareRevisionFailure(error), {
+          code: "KUBERNETES_API_TIMEOUT",
+          stage: target.stage,
+          errorClass: "KubernetesRequestTimeout",
+          message: "Kubernetes API request timed out.",
         });
       }
 
