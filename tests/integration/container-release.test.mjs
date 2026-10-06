@@ -5,6 +5,7 @@ import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   ghcrPackageName,
   github,
@@ -951,7 +952,7 @@ test("separate platform exports assemble into a digest-bound archive and reject 
 
 test("the runtime release smoke runs every Image Runtime Startup file", () => {
   const { lanes } = loadTestSuites(
-    new URL("../../scripts/ci/test-suites.json", import.meta.url).pathname,
+    fileURLToPath(new URL("../../scripts/ci/test-suites.json", import.meta.url)),
   );
   const laneFiles = ["images-runtime-startup", "images-runtime-startup-2"].flatMap((lane) =>
     lanes[lane].files.map((file) => file.path),
@@ -966,5 +967,6 @@ test("the runtime release smoke runs every Image Runtime Startup file", () => {
   assert.deepEqual(
     [...runtimeImageSmokeTests].sort(),
     laneFiles.filter((path) => !ciOnly.includes(path)).sort(),
+    "Keep the release smoke list equal to the lane files; drop a ciOnly entry once the smoke runs it.",
   );
 });
