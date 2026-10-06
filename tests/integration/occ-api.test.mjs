@@ -35,6 +35,8 @@ import {
 } from "../helpers/auth-session.mjs";
 import { createTestConfigurationDriver } from "../helpers/configuration-driver.mjs";
 import { createTestSecretDriver } from "../helpers/secret-driver.mjs";
+import { createTestKubernetesComputeDriver } from "../helpers/kubernetes-compute.mjs";
+import { createOccLogger } from "../../apps/controller/src/logging.ts";
 import { availablePort } from "../helpers/available-port.mjs";
 import { stopProcess } from "../helpers/stop-process.mjs";
 
@@ -549,6 +551,7 @@ async function createInjectedFixture(options = {}) {
         installationId,
       },
       auth: authFixture.auth,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
       ...(options.provisionAuthAccount === undefined
         ? {}
         : {
@@ -4528,9 +4531,25 @@ test("Configuration and Agent writes reject invalid Secret bindings as invalid r
 
 test("Agent provisioning API validates inline configuration with existing Secret references", async () => {
   const computeDriver = createProvisioningCapableComputeDriver();
+  const logLines = [];
   const fixture = await createInjectedFixture({
     computeDriver,
     configurationDriver: createProvisioningCapableConfigurationDriver(),
+    logger: createOccLogger({
+      component: "occ-api",
+      level: "info",
+      destination: {
+        write(chunk) {
+          logLines.push(
+            ...String(chunk)
+              .split("\n")
+              .filter(Boolean)
+              .map((line) => JSON.parse(line)),
+          );
+          return true;
+        },
+      },
+    }),
   });
   const installation = await injectedRequest(fixture.app, "POST", "/installation/bootstrap", {
     body: { name: "Provisioning validation installation" },
@@ -4704,11 +4723,46 @@ test("Agent provisioning API validates inline configuration with existing Secret
       assert.equal(result.body.error.message, message, description);
     }
   }
-  // A plan the Compute Driver refuses for its own reasons (gateway settings, routing) is a
-  // conflict naming the refusal. The driver's error class is private, so it used to be a 500.
-  computeDriver.validateAgentProvisioning = () => {
-    throw new Error("Kubernetes native gateway auth must be an object.");
-  };
+  // A plan the Kubernetes Compute Driver refuses is a conflict (its error classes are private,
+  // so it used to be a 500). A gateway setting in the caller's own Configuration is named,
+  // without its value, so the caller can fix it.
+  const kubernetes = createTestKubernetesComputeDriver("compute-provisioning-validation");
+  computeDriver.validateAgentProvisioning = (input) => kubernetes.validateAgentProvisioning(input);
+  const model = { agents: { defaults: { model: "codex/gpt-6-astra" } } };
+  for (const [gateway, message] of [
+    [
+      { auth: { mode: "token" } },
+      "Configuration setting gateway.auth.mode must be trusted-proxy: Kubernetes Compute supports only native trusted-proxy gateway authentication.",
+    ],
+    [
+      { trustedProxies: ["10.99.0.0/16"] },
+      "Configuration setting gateway.trustedProxies must be omitted or match the Installation's network.gatewayTrustedProxyCidrs.",
+    ],
+  ]) {
+    const refused = await injectedRequest(
+      fixture.app,
+      "POST",
+      `/namespaces/${namespace.data.id}/agents/provision`,
+      {
+        body: provisioningRequestBody(namespace.data.id, secrets, {
+          configuration: { values: { ...model, gateway } },
+        }),
+      },
+    );
+    assert.equal(refused.status, 409, JSON.stringify(refused.body));
+    assert.deepEqual(
+      { code: refused.body.error.code, message: refused.body.error.message },
+      { code: "RESOURCE_CONFLICT", message },
+    );
+    assert.doesNotMatch(JSON.stringify(refused.body), /10\.99\./);
+  }
+  // A refusal the caller cannot fix (here the Installation enables dedicated runtime storage
+  // without gateway routing) keeps fixed text, since its reason names Installation settings.
+  // The API log names it with the request ID for the operator.
+  const unrouted = createTestKubernetesComputeDriver("compute-provisioning-unrouted", {
+    repositoryCredentials: true,
+  });
+  computeDriver.validateAgentProvisioning = (input) => unrouted.validateAgentProvisioning(input);
   const computeRefused = await injectedRequest(
     fixture.app,
     "POST",
@@ -4720,6 +4774,20 @@ test("Agent provisioning API validates inline configuration with existing Secret
   assert.equal(
     computeRefused.body.error.message,
     "The Compute Driver cannot provision this execution mode or gateway configuration.",
+  );
+  const refusals = logLines.filter((line) => line.event === "agent_provisioning.compute_refused");
+  assert.equal(refusals.length, 1, JSON.stringify(refusals));
+  assert.deepEqual(
+    {
+      severity: refusals[0].severity,
+      requestId: refusals[0].requestId,
+      reason: refusals[0].reason,
+    },
+    {
+      severity: "WARN",
+      requestId: computeRefused.body.meta.requestId,
+      reason: "Dedicated Harness storage requires gateway routing and node enrollment.",
+    },
   );
   // A dependency the Compute Driver reports as unavailable stays retryable.
   computeDriver.validateAgentProvisioning = () => {

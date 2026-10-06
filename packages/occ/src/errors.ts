@@ -286,6 +286,44 @@ export class ResourceStateConflictError extends ResourceConflictError {
   }
 }
 
+/**
+ * The Compute Driver refuses a gateway setting in the caller's own Configuration that it
+ * cannot provision, such as `gateway.auth.mode` or `gateway.trustedProxies`. Like the
+ * Configuration errors above, the message names the setting and what the Driver accepts,
+ * never a submitted value, so HTTP returns it with the 409 that other plan refusals use,
+ * and provisioning status keeps it. Raised only after the caller was authorized.
+ */
+export class ComputeGatewaySettingError extends ResourceStateConflictError {
+  readonly setting: string;
+
+  constructor(setting: string, requirement: string) {
+    super(
+      configurationFieldMessage(setting, (path) => `Configuration setting ${path} ${requirement}.`),
+    );
+    this.name = "ComputeGatewaySettingError";
+    this.setting = setting;
+  }
+}
+
+const COMPUTE_PROVISIONING_REFUSED =
+  "The Compute Driver cannot provision this execution mode or gateway configuration.";
+
+/**
+ * Any other Compute Driver refusal of a provisioning plan, such as an Installation gateway or
+ * routing setting. Its cause may name Installation configuration, so the caller gets fixed
+ * text; HTTP logs `reason` (bounded) with the request ID for the operator.
+ */
+export class ComputeProvisioningRefusedError extends ResourceStateConflictError {
+  readonly reason: string;
+
+  constructor(cause: unknown) {
+    super(COMPUTE_PROVISIONING_REFUSED);
+    this.name = "ComputeProvisioningRefusedError";
+    const reason = cause instanceof Error ? cause.message : "The Compute Driver refused the plan.";
+    this.reason = Array.from(reason).slice(0, 512).join("");
+  }
+}
+
 /*
  * Duplicate caller-chosen names, shared by the memory and PostgreSQL stores so both report
  * them alike. Each is raised only after the caller was authorized to create (or rename) that

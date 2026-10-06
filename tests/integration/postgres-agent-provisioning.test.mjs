@@ -1725,13 +1725,13 @@ test(
     });
     assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
 
-    // The Installation's gateway settings or routing changed, so the Compute Driver now refuses
-    // the stored plan with its own error class. Every attempt would refuse it the same way, so
-    // the worker fails it on the first one and says why.
-    const refusal = "Kubernetes Agent provisioning requires gateway routing and node enrollment.";
-    computeDriver.validateAgentProvisioning = () => {
-      throw new Error(refusal);
-    };
+    // The Installation now enables dedicated runtime storage without gateway routing, so the
+    // Kubernetes Compute Driver refuses the stored plan with its own error class. Every attempt
+    // would refuse it the same way, so the worker fails it on the first one and says why.
+    const unrouted = createTestKubernetesComputeDriver("compute-provisioning-unrouted", {
+      repositoryCredentials: true,
+    });
+    computeDriver.validateAgentProvisioning = (input) => unrouted.validateAgentProvisioning(input);
     await fixture.startWorker();
     const failed = await waitFor("the worker to refuse the provisioning work", async () => {
       const row = await provisioningRow(fixture.pool, namespace.id, body.requestId);
@@ -1761,6 +1761,52 @@ test(
     assert.equal(retried.body.error.code, "RESOURCE_CONFLICT");
     assert.equal(retried.body.error.message, message);
     assert.doesNotMatch(JSON.stringify(retried.body), /node enrollment/);
+
+    // A gateway setting in the caller's own plan that the Installation no longer accepts (its
+    // trusted proxy CIDRs changed) is the caller's to fix, so status and retry name it.
+    const proxied = provisioningBody(namespace.id, secrets);
+    proxied.configuration.values.gateway = { trustedProxies: ["127.0.0.1/32"] };
+    const matching = createTestKubernetesComputeDriver("compute-provisioning-loopback-proxy");
+    computeDriver.validateAgentProvisioning = (input) => matching.validateAgentProvisioning(input);
+    const admittedProxy = await fixture.request(
+      "POST",
+      `/namespaces/${namespace.id}/agents/provision`,
+      { body: proxied },
+    );
+    assert.equal(admittedProxy.status, 202, JSON.stringify(admittedProxy.body));
+    const moved = createTestKubernetesComputeDriver("compute-provisioning-moved-proxy", {
+      gatewayTrustedProxyCidrs: ["10.42.0.0/16"],
+    });
+    computeDriver.validateAgentProvisioning = (input) => moved.validateAgentProvisioning(input);
+    await fixture.startWorker();
+    const proxyFailed = await waitFor(
+      "the worker to refuse the stale gateway setting",
+      async () => {
+        const row = await provisioningRow(fixture.pool, namespace.id, proxied.requestId);
+        return row.progress.error === undefined ? undefined : row;
+      },
+    );
+    await fixture.stopWorker();
+    const settingMessage =
+      "Configuration setting gateway.trustedProxies must be omitted or match the Installation's network.gatewayTrustedProxyCidrs.";
+    assert.deepEqual(proxyFailed.progress.error, {
+      code: "PROVISIONING_REJECTED",
+      message: settingMessage,
+    });
+    const proxyWork = await fixture.pool.query(
+      "SELECT state, attempt_count FROM occ.controller_work WHERE idempotency_key = $1",
+      [admittedProxy.data.provisioning.workId],
+    );
+    assert.deepEqual(proxyWork.rows, [{ state: "failed_permanent", attempt_count: 1 }]);
+    const proxyRetried = await fixture.request(
+      "POST",
+      `${admittedProxy.data.provisioning.url}/retry`,
+    );
+    assert.equal(proxyRetried.status, 409, JSON.stringify(proxyRetried.body));
+    assert.deepEqual(
+      { code: proxyRetried.body.error.code, message: proxyRetried.body.error.message },
+      { code: "RESOURCE_CONFLICT", message: settingMessage },
+    );
   },
 );
 
