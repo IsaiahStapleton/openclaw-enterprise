@@ -1026,3 +1026,33 @@ test(
     }
   },
 );
+
+test("a null sign-in provider renders like an absent one", tooling, async (t) => {
+  // `auth.github: null` (or `--set auth.github=null`) deletes the provider's defaults. The
+  // chart must then render the password-only install, as it already did for Google and OIDC,
+  // instead of failing with a template nil pointer.
+  const directory = await startupDirectory(t);
+  for (const provider of ["github", "google", "oidc"]) {
+    const objects = await renderChart({ [`auth.${provider}`]: "null" });
+    const rendered = signInSettings(deploymentEnv(objects, "api"));
+    assert.deepEqual(rendered, defaultInstallSettings, provider);
+    assert.equal(
+      objects.filter(
+        ({ kind, metadata }) => kind === "NetworkPolicy" && /-login-egress$/.test(metadata.name),
+      ).length,
+      0,
+      provider,
+    );
+    assert.equal(
+      await startupCode(directory, resolveSecrets(rendered)),
+      "PERSISTENCE_UNAVAILABLE",
+      provider,
+    );
+  }
+  // A null provider leaves nothing to enable, so a recovery user is refused as for an
+  // install without external sign-in.
+  assert.match(
+    await chartRefusal({ "auth.github": "null", "auth.recoveryUserId": recoveryUserId }),
+    /auth\.recoveryUserId requires auth\.github\.enabled, auth\.google\.enabled or auth\.oidc\.enabled/,
+  );
+});
