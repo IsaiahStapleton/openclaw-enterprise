@@ -2330,7 +2330,7 @@ test("Names follow the Backend ID text rule, so C1 controls are refused", async 
   const namespace = await createNamespace(controller, `name\u00a0${"😀".repeat(195)}`);
   const configuration = await createConfiguration(controller, namespace.id);
 
-  // C0, DEL and C1 controls (PostgreSQL's [[:cntrl:]] refuses C1 in an en_US.utf8 database),
+  // C0, DEL and C1 controls (PostgreSQL's [[:cntrl:]] name checks refuse all three),
   // line and paragraph separators, edge whitespace, and 201 code points.
   for (const name of [
     "name\u0000x",

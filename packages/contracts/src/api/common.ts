@@ -33,8 +33,9 @@ export const AgentProvisioningWorkId = Type.String({
  * The text rule shared by Names and Backend IDs: no leading or trailing whitespace, and no
  * control character (C0, DEL or C1) and no line or paragraph separator (U+2028, U+2029)
  * anywhere. C1 is refused because the PostgreSQL `[[:cntrl:]]` checks on names and backend
- * IDs refuse it in an en_US.utf8 (libc) database, so a value the API accepted could not be
- * saved. The separators never matched the old `.+` Name pattern either.
+ * IDs refuse it: PostgreSQL's `[[:cntrl:]]` is exactly C0, DEL and C1 under every locale
+ * provider, so a value the API accepted could not be saved. The separators never matched the
+ * old `.+` Name pattern either; PostgreSQL accepts them.
  */
 const PLAIN_TEXT_PATTERN = /^(?!\s)(?!.*\s$)[^\u0000-\u001f\u007f-\u009f\u2028\u2029]+$/.source;
 
