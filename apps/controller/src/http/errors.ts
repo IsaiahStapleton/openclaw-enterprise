@@ -179,25 +179,101 @@ function expectedBound(keyword: string, parameters: Record<string, unknown>): st
     : `${relation} ${limit} ${unit}${limit === 1 ? "" : "s"}`;
 }
 
+// Ajv reports a failed union's members with schema paths under the union's own path and
+// instance paths at or below its value.
+function unionMembersOf(
+  union: ValidationEntry,
+  entries: readonly ValidationEntry[],
+): readonly ValidationEntry[] {
+  return entries.filter(
+    (entry) =>
+      entry.schemaPath.startsWith(`${union.schemaPath}/`) &&
+      (entry.instancePath === union.instancePath ||
+        entry.instancePath.startsWith(`${union.instancePath}/`)),
+  );
+}
+
+function unionBranch(union: ValidationEntry, member: ValidationEntry): string {
+  return member.schemaPath.slice(union.schemaPath.length + 1).split("/")[0] ?? "";
+}
+
+// A member failure that says the value has another shape than this branch: the wrong type or
+// literal, a field the branch requires or does not accept, or a field outside the literal,
+// enum or union of literals that the branch declares for it, which is how a discriminated
+// union tells its shapes apart. Ajv stops each branch at its first failure and checks
+// properties in declaration order: declare such fields before content fields in request
+// unions, or a content failure can hide that the branch has the wrong shape.
+function rejectsBranchShape(union: ValidationEntry, member: ValidationEntry): boolean {
+  if (member.instancePath === union.instancePath) {
+    return ["required", "additionalProperties", "type", "const", "enum", "anyOf"].includes(
+      member.keyword,
+    );
+  }
+  const [, keyword, field] = member.schemaPath.slice(union.schemaPath.length + 1).split("/");
+  return (
+    keyword === "properties" &&
+    member.instancePath === `${union.instancePath}/${field}` &&
+    ["const", "enum", "anyOf"].includes(member.keyword)
+  );
+}
+
+// A union of object shapes fails once per shape, so its message would also list the fields
+// that the other shapes require. When some shapes fit the value and fail only on a field's
+// content, report just those shapes' problems and drop the others and the union itself.
+// When no shape fits, every problem stays: the request matches none of them.
+function mismatchedUnionShapes(entries: readonly ValidationEntry[]): ReadonlySet<ValidationEntry> {
+  const dropped = new Set<ValidationEntry>();
+  // Inner unions first: a nested union that found its shape no longer counts against the
+  // outer union's branch that contains it.
+  const unions = entries
+    .filter((entry) => entry.keyword === "anyOf" && typeof entry.schemaPath === "string")
+    .sort((left, right) => right.schemaPath.length - left.schemaPath.length);
+  for (const union of unions) {
+    // A recursive union reports every level with one schema path, so its members cannot be
+    // told apart by level.
+    if (unions.some((other) => other !== union && other.schemaPath === union.schemaPath)) {
+      continue;
+    }
+    const branches = new Map<string, ValidationEntry[]>();
+    const remaining = entries.filter((entry) => !dropped.has(entry));
+    for (const member of unionMembersOf(union, remaining)) {
+      const branch = unionBranch(union, member);
+      branches.set(branch, [...(branches.get(branch) ?? []), member]);
+    }
+    const mismatched = [...branches.values()].filter((failures) =>
+      failures.some((member) => rejectsBranchShape(union, member)),
+    );
+    if (mismatched.length === branches.size) {
+      continue;
+    }
+    dropped.add(union);
+    for (const member of mismatched.flat()) {
+      dropped.add(member);
+    }
+  }
+  return dropped;
+}
+
 // A union of literals or scalar types fails once per member, at the same field. Report that
 // field once with the accepted members instead of one contradictory problem per member.
-function collapseScalarUnions(entries: readonly ValidationEntry[]): readonly ContractProblem[] {
+function collapseScalarUnions(allEntries: readonly ValidationEntry[]): readonly ContractProblem[] {
+  const dropped = mismatchedUnionShapes(allEntries);
+  const entries = allEntries.filter((entry) => !dropped.has(entry));
   const collapsed = new Map<ValidationEntry, ContractProblem | null>();
   // A member of a union that does not collapse names only one alternative, so it gets no hint.
   const unionMembers = new Set<ValidationEntry>();
+  for (const union of allEntries) {
+    if (union.keyword === "anyOf" && typeof union.schemaPath === "string") {
+      for (const member of unionMembersOf(union, allEntries)) {
+        unionMembers.add(member);
+      }
+    }
+  }
   for (const union of entries) {
     if (union.keyword !== "anyOf" || typeof union.schemaPath !== "string") {
       continue;
     }
-    const members = entries.filter(
-      (entry) =>
-        entry.schemaPath.startsWith(`${union.schemaPath}/`) &&
-        (entry.instancePath === union.instancePath ||
-          entry.instancePath.startsWith(`${union.instancePath}/`)),
-    );
-    for (const member of members) {
-      unionMembers.add(member);
-    }
+    const members = unionMembersOf(union, entries);
     if (
       members.length === 0 ||
       !members.every(
@@ -211,7 +287,7 @@ function collapseScalarUnions(entries: readonly ValidationEntry[]): readonly Con
     // A literal member can fail on both its JSON type and its value; name it by its value.
     const branches = new Map<string, ValidationEntry[]>();
     for (const member of members) {
-      const branch = member.schemaPath.slice(union.schemaPath.length + 1).split("/")[0] ?? "";
+      const branch = unionBranch(union, member);
       branches.set(branch, [...(branches.get(branch) ?? []), member]);
     }
     const accepted = [
