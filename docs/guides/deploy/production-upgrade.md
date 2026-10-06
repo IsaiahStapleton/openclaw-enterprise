@@ -75,7 +75,8 @@ Revision read access must also cover the replacement revisions.
 Review saved Agent and Configuration drafts before a runtime upgrade. Each
 deployment snapshots the current draft, not the previous active revision.
 
-Restarting the repository broker loses delivered sessions. Before a release,
+A controller-only release does not deploy Agents. Restarting the repository
+broker loses delivered sessions. Before a release,
 plan interruption and authorized replacement revisions for affected Agents;
 review their drafts and deploy grants. Stop if recovery cannot be performed
 safely. A lost delivered session fails its revision and queues retirement;
