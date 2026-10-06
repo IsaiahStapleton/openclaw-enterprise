@@ -286,7 +286,9 @@ explicitly, and test bridges do not establish turnkey production support. See it
 The pinned OpenClaw [runtime image](../../deploy/runtime/README.md) lacks required
 worker placement (`cloudWorkers.requiredProfile`) and native worker inference.
 Deploy and provisioning therefore refuse dedicated native OpenClaw with
-`400 INVALID_REQUEST`, and the console withholds that choice. An operator whose
+`400 INVALID_REQUEST`, and the console withholds that choice. Provisioning
+status reads do not recheck this support, so work accepted before it was
+removed still reports its status; retry refuses it. An operator whose
 runtime image is built from an OpenClaw source with both features can declare
 [`runtime.nativeWorkerSupport`](configuration.md#installation-startup-configuration).
 
