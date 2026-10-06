@@ -159,14 +159,16 @@ fetch_gateway_password() {
     rmdir -- "$working_directory"
     return 1
   fi
-  transport_secret="openclaw-agent-transport-$agent_suffix"
-  if [ "${AGENT_EXECUTION_MODE:?}" = dedicated ]; then
-    transport_secret="gateway-password-$agent_suffix"
-  fi
+  # Both execution modes keep the password in the Agent's separate password Secret.
+  # An Agent deployed before that Secret existed still carries it in its transport Secret.
   if ! secret_json="$(kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n "$GATEWAY_NAMESPACE" \
-    get secret "$transport_secret" -o json)"; then
-    rmdir -- "$working_directory"
-    return 1
+    get secret "gateway-password-$agent_suffix" -o json 2>/dev/null)"; then
+    transport_secret="openclaw-agent-transport-$agent_suffix"
+    if ! secret_json="$(kubectl --kubeconfig "$KUBECONFIG_FILE" --context "$CONTEXT" -n "$GATEWAY_NAMESPACE" \
+      get secret "$transport_secret" -o json)"; then
+      rmdir -- "$working_directory"
+      return 1
+    fi
   fi
   if ! python3 -c '
 import base64, json, sys
@@ -187,10 +189,12 @@ Path(sys.argv[1]).write_bytes(password)
 fetch_gateway_password
 ```
 
-Replace `openclaw-agent-transport-` if your Installation sets a different
-`runtime.transportSecretPrefix` and the Agent is embedded. Dedicated Agents use
-the separate `gateway-password-<suffix>` Secret in the Gateway namespace. Export `GATEWAY_PASSWORD_FILE` if you use your
-own protected file.
+Embedded and dedicated Agents both keep the password in the
+`gateway-password-<suffix>` Secret next to the Gateway. The fallback to the
+`openclaw-agent-transport-<suffix>` Secret is for Agents deployed before that
+separate Secret existed; replace `openclaw-agent-transport-` if your Installation
+sets a different `runtime.transportSecretPrefix`. Export `GATEWAY_PASSWORD_FILE`
+if you use your own protected file.
 
 ## Verify rejection and a real response
 
