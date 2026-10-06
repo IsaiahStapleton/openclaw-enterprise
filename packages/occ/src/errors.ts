@@ -647,6 +647,17 @@ export class PluginPolicyValidationError extends Error {
       this.pluginId = pluginId;
     }
   }
+
+  /**
+   * The same refusal without the `/plugins/<id>` pointer, for selections read from storage
+   * (deploy, an update that omits `plugins`, provisioning replay or retry): the request body
+   * holds no such path. The message still names the plugin.
+   */
+  withoutRequestPath(): PluginPolicyValidationError {
+    const stored = new PluginPolicyValidationError();
+    stored.message = this.message;
+    return stored;
+  }
 }
 
 /** Sanitized admission outcome. The path identifies configuration, never Secret contents. */

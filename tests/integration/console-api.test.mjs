@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { createConsoleAppFixture, backendFixtures } from "../helpers/console-app.mjs";
 import { createHarnessConfiguration } from "../helpers/harness-configuration.mjs";
 import { cookieHeaderFromSetCookie, setCookieHeaders } from "../helpers/auth-session.mjs";
 
+const contract = JSON.parse(
+  await readFile(
+    new URL("../../packages/contracts/openapi/occ-api.openapi.json", import.meta.url),
+    "utf8",
+  ),
+);
 const UNTRUSTED_ORIGIN_MESSAGE =
   "A trusted browser origin is required: session-cookie requests that change state must come from the console and send its Origin header.";
 
@@ -328,6 +335,34 @@ test("console auth routes reject untrusted browser origins and issue production 
     headers: { cookie: requestCookie, origin: fixture.origin, "x-occ-session-key": sessionKey },
   });
   assert.equal(cliSignOut.response.status, 200, cliSignOut.text);
+
+  // A body that fails the sign-in schema is a 400 before any credential check.
+  const malformedSignIn = await fixture.rawRequest("POST", "/api/auth/sign-in/email", {
+    headers: { origin: fixture.origin },
+    body: { email: fixture.credentials.email },
+  });
+  assert.equal(malformedSignIn.response.status, 400, malformedSignIn.text);
+  assert.equal(JSON.parse(malformedSignIn.text).error.code, "INVALID_REQUEST");
+
+  // Every status answered above is in the checked-in OpenAPI contract, so clients generated
+  // from it handle the Origin and schema refusals. The contract once listed neither.
+  for (const [path, result] of [
+    ["/api/auth/sign-in/email", rejected],
+    ["/api/auth/sign-in/email", crossSiteSignIn],
+    ["/api/auth/sign-in/email", accepted],
+    ["/api/auth/sign-in/email", malformedSignIn],
+    ["/api/auth/sign-out", rejectedSignOut],
+    ["/api/auth/sign-out", crossSiteNoOrigin],
+    ["/api/auth/sign-out", foreignSignOut],
+    ["/api/auth/sign-out", originlessSignOut],
+    ["/api/auth/sign-out", cliSignOut],
+  ]) {
+    const status = String(result.response.status);
+    assert.ok(
+      Object.hasOwn(contract.paths[path].post.responses, status),
+      `POST ${path} answered ${status}, which its OpenAPI operation does not list`,
+    );
+  }
 });
 
 test("untrusted cookie mutations do not clean up an expired session", async (t) => {
