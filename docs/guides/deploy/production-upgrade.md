@@ -271,7 +271,9 @@ NetworkPolicy. Each loads the Installation, Drivers and `presets.files`, then
 runs the bundled Kubernetes Compute Driver's preflight as startup does, without
 opening the database. If either fails, as when a listed Preset file is missing
 from the image or split-layout tenants remain, the command prints each failure,
-deletes these resources, and stops; the old release keeps serving. Logs and
+deletes these resources, and stops; the old release keeps serving. It cannot
+see the stored Installation name, so
+[check that first](production-upgrade-recovery.md#installation-name). Logs and
 status are saved as `preflight-<api|worker>.log` and `-status.json`, taking up
 to about 90 seconds past `--timeout-seconds`. Runtime upgrades use the current
 controller image. If the helper is killed, delete its leftovers with
