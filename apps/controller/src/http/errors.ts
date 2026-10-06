@@ -255,7 +255,9 @@ function mismatchedUnionShapes(entries: readonly ValidationEntry[]): ReadonlySet
 }
 
 // A union of literals or scalar types fails once per member, at the same field. Report that
-// field once with the accepted members instead of one contradictory problem per member.
+// field once with the accepted members instead of one contradictory problem per member. A
+// member that is itself such a union counts with its accepted members, so a string sent for
+// an object-shape union or null is one wrong-type problem naming object and null.
 function collapseScalarUnions(allEntries: readonly ValidationEntry[]): readonly ContractProblem[] {
   const dropped = mismatchedUnionShapes(allEntries);
   const entries = allEntries.filter((entry) => !dropped.has(entry));
@@ -269,41 +271,54 @@ function collapseScalarUnions(allEntries: readonly ValidationEntry[]): readonly 
       }
     }
   }
-  for (const union of entries) {
-    if (union.keyword !== "anyOf" || typeof union.schemaPath !== "string") {
-      continue;
-    }
-    const members = unionMembersOf(union, entries);
+  // Accepted members of each collapsed union, for an outer union that has it as a member.
+  const acceptedBy = new Map<
+    ValidationEntry,
+    { readonly values: readonly (string | undefined)[]; readonly literals: boolean }
+  >();
+  // Inner unions first, so an outer union sees which of its members collapsed.
+  const unions = entries
+    .filter((entry) => entry.keyword === "anyOf" && typeof entry.schemaPath === "string")
+    .sort((left, right) => right.schemaPath.length - left.schemaPath.length);
+  for (const union of unions) {
+    const allMembers = unionMembersOf(union, entries);
+    // A collapsed inner union stands for its own members. Every member, collapsed or not, must
+    // fail at the union's own value: a recursive union's deeper level shares its schema path,
+    // so it is no member that could block a collapse here.
+    const members = allMembers.filter((entry) => collapsed.get(entry) !== null);
     if (
       members.length === 0 ||
+      !allMembers.every((entry) => entry.instancePath === union.instancePath) ||
       !members.every(
-        (entry) =>
-          entry.instancePath === union.instancePath &&
-          (entry.keyword === "const" || entry.keyword === "type"),
+        (entry) => entry.keyword === "const" || entry.keyword === "type" || acceptedBy.has(entry),
       )
     ) {
       continue;
     }
-    // A literal member can fail on both its JSON type and its value; name it by its value.
     const branches = new Map<string, ValidationEntry[]>();
     for (const member of members) {
       const branch = unionBranch(union, member);
       branches.set(branch, [...(branches.get(branch) ?? []), member]);
     }
-    const accepted = [
-      ...new Set(
-        [...branches.values()].map((failures) => {
-          const literal = failures.find((entry) => entry.keyword === "const");
-          return literal === undefined
-            ? expectedType(failures[0]!.params as Record<string, unknown>)
-            : JSON.stringify((literal.params as Record<string, unknown>).allowedValue);
-        }),
-      ),
-    ];
+    const values = [...branches.values()].flatMap((failures) => {
+      const inner = failures.find((entry) => acceptedBy.has(entry));
+      if (inner !== undefined) {
+        return failures.length === 1 ? acceptedBy.get(inner)!.values : [undefined];
+      }
+      // A literal member can fail on both its JSON type and its value; name it by its value.
+      const literal = failures.find((entry) => entry.keyword === "const");
+      return literal === undefined
+        ? expectedType(failures[0]!.params as Record<string, unknown>)
+        : JSON.stringify((literal.params as Record<string, unknown>).allowedValue);
+    });
+    const accepted = [...new Set(values)];
     if (accepted.some((value) => value === undefined)) {
       continue;
     }
-    const literals = members.some((entry) => entry.keyword === "const");
+    const literals = members.some(
+      (entry) => entry.keyword === "const" || acceptedBy.get(entry)?.literals === true,
+    );
+    acceptedBy.set(union, { values: accepted, literals });
     collapsed.set(union, {
       detail: { path: union.instancePath, code: literals ? "INVALID_VALUE" : "INVALID_TYPE" },
       expected: `one of ${accepted.join(", ")}`,
@@ -344,7 +359,18 @@ function validationProblems(error: FastifyError): readonly ContractProblem[] {
   if (!Array.isArray(error.validation)) {
     return [];
   }
-  return collapseScalarUnions(error.validation).slice(0, 32);
+  // Shapes that fail the same way report the same problem; list it once, in first-seen order.
+  const seen = new Set<string>();
+  return collapseScalarUnions(error.validation)
+    .filter(({ detail, expected }) => {
+      const key = JSON.stringify([detail.path, detail.code, expected]);
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 32);
 }
 
 const DETAIL_PROBLEMS: Readonly<Record<ErrorDetail["code"], string>> = Object.freeze({

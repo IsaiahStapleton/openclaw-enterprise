@@ -2713,6 +2713,19 @@ test("Channel directory lookup checks the exact edit target and Secret before an
     "The request does not match the operation contract: body /query is too long.",
   );
   assert.deepEqual(longQuery.body.error.details, [{ path: "/query", code: "TOO_LONG" }]);
+  // An unknown kind fits no shape, so every shape's problem stays, but the three hydration
+  // shapes' identical missing /ids is listed once.
+  const unknownKind = await controller.request("POST", path, {
+    body: { ...body, kind: "groups" },
+  });
+  assert.equal(unknownKind.status, 400);
+  assert.deepEqual(unknownKind.body.error.details, [
+    { path: "/kind", code: "INVALID_VALUE" },
+    { path: "/agentId", code: "REQUIRED" },
+    { path: "/configurationId", code: "REQUIRED" },
+    { path: "/ids", code: "REQUIRED" },
+    { path: "", code: "INVALID_VALUE" },
+  ]);
   assert.deepEqual(
     (
       await controller.request("POST", path, {
@@ -4546,6 +4559,13 @@ test("Agent provisioning API validates inline configuration with existing Secret
       "The request does not match the operation contract: body /harnessAuth/source/kind has an unsupported value.",
     ],
     [
+      // A string fits neither a Harness authentication shape nor null: one wrong-type problem
+      // names both, not one per union level.
+      "Harness authentication of the wrong type",
+      provisioningRequestBody(namespace.data.id, secrets, { harnessAuth: "api_key" }),
+      "The request does not match the operation contract: body /harnessAuth has the wrong type (expected one of object, null).",
+    ],
+    [
       "too many binding destinations",
       provisioningRequestBody(namespace.data.id, secrets, {
         configuration: { secretBindings: oversizedBindings },
@@ -4610,6 +4630,19 @@ test("Agent provisioning API validates inline configuration with existing Secret
       assert.equal(result.body.error.message, message, description);
     }
   }
+  const wrongTypeHarnessAuth = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    {
+      body: invalidBodies.find(([description]) =>
+        description.startsWith("Harness authentication"),
+      )[1],
+    },
+  );
+  assert.deepEqual(wrongTypeHarnessAuth.body.error.details, [
+    { path: "/harnessAuth", code: "INVALID_TYPE" },
+  ]);
   // The reserved destination is named by its pointer under the inline Configuration.
   const reservedProvisioning = await injectedRequest(
     fixture.app,
