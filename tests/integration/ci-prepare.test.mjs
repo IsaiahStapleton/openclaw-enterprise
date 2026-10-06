@@ -1733,6 +1733,30 @@ test("production upgrade preparation requires two distinct immutable image pairs
   assert.match(unprepared.stderr, /must match the prepared lane state/);
 });
 
+// GitHub refuses NODE_OPTIONS in $GITHUB_ENV with an ##[error] annotation that reads like the
+// lane's failure. run-tests.mjs applies the lane's env to each test process itself.
+test("lane preparation does not export the lane's NODE_OPTIONS to GITHUB_ENV", async (t) => {
+  const root = await fixture(t);
+  const statePath = join(root, "state.json");
+  const githubEnv = join(root, "github.env");
+  const manifest = loadTestSuites(join(repositoryRoot, "scripts/ci/test-suites.json"));
+  assert.ok(manifest.lanes["checks-baseline-1"].env.NODE_OPTIONS);
+  const prepared = runPrepare([
+    "--lane",
+    "checks-baseline-1",
+    "--state",
+    statePath,
+    "--github-env",
+    githubEnv,
+  ]);
+  assert.equal(prepared.status, 0, prepared.stderr);
+  const exported = (await readFile(githubEnv, "utf8")).trim().split("\n");
+  assert.deepEqual(exported.map((line) => line.split("=")[0]).sort(), [
+    "OPENCLAW_ENTERPRISE_CI_PREFIX",
+    "OPENCLAW_ENTERPRISE_CI_STATE",
+  ]);
+});
+
 test("ordinary CI groups require platform proof and exclude installed live repository writes", async () => {
   const manifest = loadTestSuites(join(repositoryRoot, "scripts/ci/test-suites.json"));
   for (const name of ["ci", "full"]) {

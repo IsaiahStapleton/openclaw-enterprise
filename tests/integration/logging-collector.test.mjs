@@ -22,15 +22,29 @@ async function docker(args) {
   return (await exec("docker", args, { timeout: 120_000, maxBuffer: 1024 * 1024 })).stdout.trim();
 }
 
-async function waitFor(check) {
+// A timeout or failed check names the outcome it waited for and, given the
+// fixture, the state of the Collector and backend containers with the Collector's
+// last log lines, so a CI failure shows which step stalled and whether a container
+// had stopped.
+async function waitFor(outcome, check, fixture) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    if (await check()) {
+    let done;
+    try {
+      done = await check();
+    } catch (error) {
+      const state = fixture ? ` ${await fixture.describe()}` : "";
+      throw new Error(`Waiting for ${outcome} failed: ${error.message}.${state}`, {
+        cause: error,
+      });
+    }
+    if (done) {
       return;
     }
     await delay(100);
   }
-  assert.fail("Timed out waiting for the real Collector outcome.");
+  const state = fixture ? ` ${await fixture.describe()}` : "";
+  assert.fail(`Timed out waiting for ${outcome}.${state}`);
 }
 
 function attributes(entries = []) {
@@ -122,6 +136,30 @@ async function collectorFixture(t, prefix) {
     port(containerPort) {
       return docker(["port", collector, `${containerPort}/tcp`]);
     },
+    async describe() {
+      const states = [];
+      for (const [role, name] of [
+        ["Collector", collector],
+        ["backend", backend],
+      ]) {
+        const state = await exec(
+          "docker",
+          ["inspect", "--format", "{{.State.Status}} (exit {{.State.ExitCode}})", name],
+          { timeout: 10_000 },
+        )
+          .then(({ stdout }) => stdout.trim())
+          .catch(() => "absent");
+        states.push(`${role} ${state}`);
+      }
+      // The Collector logs at error level, so these are its recent failures.
+      const log = await exec("docker", ["logs", "--tail", "5", collector], {
+        timeout: 10_000,
+        maxBuffer: 1024 * 1024,
+      })
+        .then(({ stdout, stderr }) => `${stdout}${stderr}`.trim())
+        .catch((error) => `unavailable: ${error.message}`);
+      return `${states.join(", ")}; Collector log: ${log.slice(-800) || "empty"}`;
+    },
   };
 }
 
@@ -182,26 +220,33 @@ function sentinelLogs(resource) {
 }
 
 // Waits for the sentinel and returns the other exported records.
-async function exportedThroughSentinel(out, mapRecord) {
+async function exportedThroughSentinel(fixture, mapRecord) {
   const isSentinel = (record) =>
     attributes(record.attributes)["occ.startup.phase"] === sentinelPhase;
   let exported = [];
   let unreadable;
   try {
-    await waitFor(async () => {
-      try {
-        exported = await exportedRecords(out, (resource, record) => ({ resource, record }));
-        unreadable = undefined;
-      } catch (error) {
-        // The backend may still be writing the export line.
-        if (error instanceof SyntaxError) {
-          unreadable = error;
-          return false;
+    await waitFor(
+      "the exported sentinel record",
+      async () => {
+        try {
+          exported = await exportedRecords(fixture.out, (resource, record) => ({
+            resource,
+            record,
+          }));
+          unreadable = undefined;
+        } catch (error) {
+          // The backend may still be writing the export line.
+          if (error instanceof SyntaxError) {
+            unreadable = error;
+            return false;
+          }
+          throw error;
         }
-        throw error;
-      }
-      return exported.some(({ record }) => isSentinel(record));
-    });
+        return exported.some(({ record }) => isSentinel(record));
+      },
+      fixture,
+    );
   } catch (error) {
     if (unreadable !== undefined) {
       throw new Error(`The Collector export never became readable: ${unreadable.message}`, {
@@ -231,10 +276,13 @@ test(
     });
     const forwardAddress = await fixture.port(24224);
     let metricsAddress = await fixture.port(8888);
-    await waitFor(async () =>
-      fetch(`http://${metricsAddress}/metrics`)
-        .then((r) => r.ok)
-        .catch(() => false),
+    await waitFor(
+      "the Collector metrics endpoint",
+      async () =>
+        fetch(`http://${metricsAddress}/metrics`)
+          .then((r) => r.ok)
+          .catch(() => false),
+      fixture,
     );
     const records = async () => {
       return exportedRecords(fixture.out, (resource, record) => ({
@@ -317,7 +365,7 @@ test(
       [],
       ["com.docker.compose.service=worker"],
     );
-    await waitFor(filtered);
+    await waitFor("the Collector to count the filtered near-match", filtered, fixture);
 
     await send("gateway", [
       JSON.stringify({
@@ -453,7 +501,11 @@ test(
       "{invalid json",
       JSON.stringify({ level: "info", subsystem: "gateway", message: "x".repeat(33_000) }),
     ]);
-    await waitFor(async () => (await records()).length >= 13);
+    await waitFor(
+      "at least 13 exported records",
+      async () => (await records()).length >= 13,
+      fixture,
+    );
     const initial = await records();
     assert.equal(initial.length, 13, "only reviewed JSON classes and Codex stderr pass");
     const warningEvents = [
@@ -652,30 +704,41 @@ test(
     // file-backed queue survives a process restart before the destination returns.
     await docker(["stop", "--time", "5", fixture.backend]);
     await send("gateway", [JSON.stringify({ level: "warn", subsystem: "gateway" })]);
-    await waitFor(async () => {
-      const current = await fetch(`http://${metricsAddress}/metrics`).then((response) =>
-        response.text(),
-      );
-      return /otelcol_exporter_queue_size[^\n]* [1-9]/.test(current);
-    });
+    await waitFor(
+      "a queued export while the destination is stopped",
+      async () => {
+        const current = await fetch(`http://${metricsAddress}/metrics`).then((response) =>
+          response.text(),
+        );
+        return /otelcol_exporter_queue_size[^\n]* [1-9]/.test(current);
+      },
+      fixture,
+    );
     await docker(["stop", "--time", "10", fixture.collector]);
     await docker(["start", fixture.collector]);
     metricsAddress = (await fixture.port(8888)).trim();
-    await waitFor(async () => {
-      try {
-        return (await fetch(`http://${metricsAddress}/metrics`)).status === 200;
-      } catch {
-        return false;
-      }
-    });
+    await waitFor(
+      "the restarted Collector metrics endpoint",
+      async () => {
+        try {
+          return (await fetch(`http://${metricsAddress}/metrics`)).status === 200;
+        } catch {
+          return false;
+        }
+      },
+      fixture,
+    );
     await docker(["start", fixture.backend]);
-    await waitFor(async () =>
-      (await records()).some(
-        ({ resource, record }) =>
-          resource["service.name"] === "openclaw-gateway" &&
-          record.severityNumber === 13 &&
-          record.body.stringValue === "gateway.operational",
-      ),
+    await waitFor(
+      "the queued record at the restored destination",
+      async () =>
+        (await records()).some(
+          ({ resource, record }) =>
+            resource["service.name"] === "openclaw-gateway" &&
+            record.severityNumber === 13 &&
+            record.body.stringValue === "gateway.operational",
+        ),
+      fixture,
     );
     await docker(["stop", "--time", "10", fixture.collector]);
     // The file-export test destination starts a new capture segment on restart.
@@ -716,14 +779,17 @@ async function startKubernetesProcessors(fixture) {
     publish: ["127.0.0.1::4318"],
   });
   const receiverAddress = await fixture.port(4318);
-  await waitFor(async () =>
-    fetch(`http://${receiverAddress}/v1/logs`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ resourceLogs: [] }),
-    })
-      .then((response) => response.status < 500)
-      .catch(() => false),
+  await waitFor(
+    "the Collector OTLP receiver",
+    async () =>
+      fetch(`http://${receiverAddress}/v1/logs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ resourceLogs: [] }),
+      })
+        .then((response) => response.status < 500)
+        .catch(() => false),
+    fixture,
   );
   return receiverAddress;
 }
@@ -821,7 +887,7 @@ test(
         record,
       }));
     };
-    await waitFor(async () => (await records()).length === 1);
+    await waitFor("the exported record", async () => (await records()).length === 1, fixture);
     const [exported] = await records();
     assert.equal(exported.resource["service.name"], "occ-api");
     assert.equal(exported.resource["service.instance.id"], podUid);
@@ -910,7 +976,11 @@ test(
       body: JSON.stringify({ resourceLogs: [workerResource] }),
     });
     assert.equal(workerResponse.status, 200, await workerResponse.text());
-    await waitFor(async () => (await records()).length === 1 + cases.length);
+    await waitFor(
+      `${1 + cases.length} exported records`,
+      async () => (await records()).length === 1 + cases.length,
+      fixture,
+    );
     const workerRecords = (await records()).filter(
       ({ resource }) => resource["service.name"] === "occ-worker",
     );
@@ -1043,7 +1113,7 @@ test(
       },
       sentinelLogs(resource("gateway")),
     ]);
-    const exported = await exportedThroughSentinel(fixture.out, (resource, record) => ({
+    const exported = await exportedThroughSentinel(fixture, (resource, record) => ({
       resource: attributes(resource.resource?.attributes),
       attributes: attributes(record.attributes),
       record,
@@ -1222,7 +1292,7 @@ test(
       },
       sentinelLogs(resource),
     ]);
-    const exported = await exportedThroughSentinel(fixture.out, (_resource, record) => ({
+    const exported = await exportedThroughSentinel(fixture, (_resource, record) => ({
       attributes: attributes(record.attributes),
       record,
     }));
@@ -1348,7 +1418,7 @@ test(
       },
       sentinelLogs(resource),
     ]);
-    const exported = await exportedThroughSentinel(fixture.out, (_resource, record) => ({
+    const exported = await exportedThroughSentinel(fixture, (_resource, record) => ({
       attributes: attributes(record.attributes),
       record,
     }));
@@ -1481,7 +1551,7 @@ test(
       fetch(`${control}/requests`)
         .then((response) => response.json())
         .catch(() => []);
-    await waitFor(async () =>
+    await waitFor("the Pod metadata fixture", async () =>
       fetch(`${control}/requests`)
         .then((response) => response.ok)
         .catch(() => false),
@@ -1520,12 +1590,20 @@ test(
 
     // Hold Pod metadata well past filelog's first 200 ms poll. A pipeline that
     // started without metadata has read, dropped and committed the record by now.
-    await waitFor(async () => (await podRequests()).length > 0);
+    await waitFor(
+      "the Collector's first Pod metadata request",
+      async () => (await podRequests()).length > 0,
+      fixture,
+    );
     await delay(3_000);
     assert.deepEqual(await records(), []);
     await fetch(`${control}/release`, { method: "POST" });
 
-    await waitFor(async () => (await records()).length > 0);
+    await waitFor(
+      "the record after Pod metadata syncs",
+      async () => (await records()).length > 0,
+      fixture,
+    );
     const exported = await records();
     assert.equal(exported.length, 1);
     assert.equal(exported[0].resource["service.name"], "occ-worker");
