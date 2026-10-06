@@ -255,7 +255,7 @@ Expect one worker Pod containing worker and credential-service containers, a
 registry and public CA; the worker additionally mounts the private control
 socket; App/TLS private inputs stay in the service container. In the worker
 Pod, only the worker container receives a Kubernetes API service-account token;
-the credential service container gets none. Confirm those mounts from the
+the credential-service container gets none. Confirm those mounts from the
 rendered manifests before deploying an Agent.
 
 A ready sidecar confirms protected startup and the control listener. Continue
