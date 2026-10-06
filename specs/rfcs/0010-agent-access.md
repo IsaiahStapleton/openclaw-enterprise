@@ -1,5 +1,6 @@
 ---
 author: freeqaz-openai
+implementation_status: Partially implemented
 status: Proposed
 ---
 

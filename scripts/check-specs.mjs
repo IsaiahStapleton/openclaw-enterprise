@@ -14,6 +14,7 @@ const rfcs = path.join(specs, "rfcs");
 const md = createDocsMarkdown();
 const githubAnchors = createGithubAnchorReader(md);
 const statuses = new Set(["Proposed", "Accepted", "Rejected", "Superseded", "Unspecified"]);
+const implementationStatuses = new Set(["Not implemented", "Partially implemented", "Implemented"]);
 const errors = [];
 let links = 0;
 let historicalLinks = 0;
@@ -114,6 +115,9 @@ for (const file of files) {
         data.author === "github-login"
       ) {
         throw new Error("RFC requires an author GitHub login in frontmatter (without @)");
+      }
+      if (!implementationStatuses.has(data.implementation_status)) {
+        throw new Error("RFC requires a valid implementation_status in frontmatter");
       }
       if (!statuses.has(data.status)) {
         throw new Error("RFC requires a valid status in frontmatter");

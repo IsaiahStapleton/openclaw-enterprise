@@ -91,8 +91,9 @@ number, starting at `0042` or higher; check `specs/plans/` and Git history so de
 or renamed task plans do not free numbers.
 
 Keep one row per RFC in `specs/README.md`, with its linked number and name in
-the first column and its frontmatter status in the second. Update the row when
-the RFC’s name or status changes. Link an RFC and its plan to each other; plans
+the first column, its `implementation_status` in the second, and concise notes
+in the third. Link current evidence and identify material gaps for partial work.
+Update the row when the RFC’s name or implementation status changes. Link an RFC and its plan to each other; plans
 are not listed in the RFC index. If a standalone task later gains an RFC, retain
 its task ID and path and add the relationship.
 
@@ -121,13 +122,14 @@ and recordings remain outside the repository, as required by
 
 ## Status and review
 
-The RFC’s frontmatter owns its decision status; the RFC index mirrors that value.
-Every RFC entry point must begin with YAML frontmatter containing `status` and
+The RFC’s frontmatter records decision and implementation status separately.
+Every RFC entry point must begin with `status`, `implementation_status`, and
 `author`:
 
 ```yaml
 ---
 status: Proposed
+implementation_status: Not implemented
 author: github-login
 ---
 ```
@@ -155,7 +157,14 @@ This is a historical metadata fallback, not a status for new proposals.
 Preserve recorded body text and distinguish implementation progress from an
 RFC decision; adding frontmatter does not establish acceptance or release proof.
 
-New RFCs start **Proposed**. Record acceptance or another decision only when
+`implementation_status` is **Not implemented**, **Partially implemented**, or
+**Implemented**. Audit the scoped delivery against current source and references;
+record the audited revision and verification limits in the index. Keep explicitly
+separate future phases distinct from unfinished delivery. Update this field and
+the index together without rewriting historical decisions or Manual Notes.
+Implementation does not establish acceptance, live verification, or release readiness.
+
+New RFCs start **Proposed** and **Not implemented**. Record acceptance or another decision only when
 supported by the responsible reviewers' decision or the contribution policy;
 drafting a plan is not acceptance. If an RFC contains its own delivery steps,
 track delivery separately from its decision status.
