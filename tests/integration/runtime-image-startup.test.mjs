@@ -2013,10 +2013,6 @@ const timeout = setTimeout(() => {
     markStockBrokerStage("direct-private-host");
     await expectFailure("direct-unrelated-private-host", directProbe, "EPERM|EACCES|ENETUNREACH|EHOSTUNREACH");
     process.stdout.write("stock-codex-repository-broker-ready " + JSON.stringify({ commit }) + "\\n");
-    // The proof is complete. The Codex binary, a grandchild that holds this
-    // probe's pipes, takes about 5 s to exit after SIGTERM or EOF. This node is
-    // the container's PID 1, so its exit stops Codex at once.
-    process.exit();
   } finally {
     clearTimeout(timeout);
     lines.close();
