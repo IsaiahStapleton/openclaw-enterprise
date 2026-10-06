@@ -1022,8 +1022,8 @@ test(
       return observed.rows[0].state === "failed_permanent" ? observed.rows[0] : undefined;
     });
     assert.equal(work.reason_code, "PROVISIONING_REJECTED");
-    // Only the duplicate-name and plugin refusals reach the status; a denial's message stays
-    // internal.
+    // Only duplicate-name, plugin-policy and runtime-image refusals reach the status read; the
+    // error recorded for this authorization denial keeps its own message internal.
     const job = await fixture.pool.query(
       "SELECT progress->'error' AS error FROM occ.agent_provisioning_work WHERE work_id = $1",
       [admitted.data.provisioning.workId],
@@ -1569,9 +1569,8 @@ test(
     });
     const namespace = await fixture.bootstrapNamespace();
     const secrets = await createProvisioningSecrets(fixture, namespace.id);
-    // A long plugin ID (the contract admits 253 characters) makes the refusal outgrow the
-    // 256-character status message.
-    const pluginId = `codex-plugin:linear-${"a".repeat(40)}@openai-curated-remote`;
+    // A hosted-app plugin ID makes the refusal outgrow the 256-character status message.
+    const pluginId = "codex-plugin:app-69312da8e4dc81919370cb86fd172b6c@openai-curated-remote";
     const admitted = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
       body: provisioningBody(namespace.id, secrets, { plugins: { [pluginId]: { enabled: true } } }),
     });
@@ -1602,7 +1601,7 @@ test(
       ),
       failed.data.error.message,
     );
-    // Cut to the cap, counted in code points, with an ellipsis that says text is missing.
+    // Cut to the 256-character cap with an ellipsis that says text is missing.
     assert.equal(Array.from(failed.data.error.message).length, 256);
     assert.ok(failed.data.error.message.endsWith("…"), failed.data.error.message);
     const work = await switched.pool.query(

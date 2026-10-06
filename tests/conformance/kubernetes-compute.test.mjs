@@ -11610,14 +11610,15 @@ for (const embedded of [true, false]) {
         stage: "workspace_setup",
       },
     ];
-    for (const [target, write, status, reason, transient] of targets.flatMap((target) =>
+    for (const [target, write, status, reason, transient, keptReason] of targets.flatMap((target) =>
       ["create", "replace"].flatMap((write) =>
         [
-          [503, "ServiceUnavailable", true],
-          [429, "TooManyRequests", true],
-          [403, "Forbidden", false],
-          // A Status reason that is not one CamelCase word is dropped: it could carry request data.
-          [422, "Invalid: CANARY_REASON", false],
+          [503, "ServiceUnavailable", true, "ServiceUnavailable"],
+          [429, "TooManyRequests", true, "TooManyRequests"],
+          [403, "Forbidden", false, "Forbidden"],
+          // An admission webhook's denial can carry free text as its Status reason; anything but
+          // one word of letters is dropped.
+          [422, "Invalid: CANARY_REASON", false, undefined],
         ].map((answer) => [target, write, ...answer]),
       ),
     )) {
@@ -11669,7 +11670,7 @@ for (const embedded of [true, false]) {
         assert.equal(error.message, target.message);
       }
       assert.equal(error.cause.code, status);
-      assert.equal(error.cause.reason, status === 422 ? undefined : reason);
+      assert.equal(error.cause.reason, keptReason);
       assert.equal(error.cause.cause, undefined);
       assert.deepEqual(fixture.driver.describePrepareRevisionFailure(error), {
         code: transient ? "KUBERNETES_API_UNAVAILABLE" : "KUBERNETES_API_REJECTED",
