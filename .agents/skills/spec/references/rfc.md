@@ -67,7 +67,8 @@ policy and actual decision evidence.
 - Remove unused template prompts and optional sections. Keep links repository
   relative, and verify their paths and any referenced heading anchors.
 - Add or update the RFC’s row in `specs/README.md`, showing its linked number
-  and name in the first column, `implementation_status` in the second,
+  and name in the first column, the emoji for `implementation_status` from the
+  index legend in the second,
   evidence or remaining gaps in the third, and the author in the fourth. Keep the row synchronized when the
   name, implementation status, or author changes. Link the RFC and plan
   to each other when both exist.
