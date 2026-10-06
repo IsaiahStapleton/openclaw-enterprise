@@ -18,7 +18,7 @@ async function loopbackServer(t, respond) {
   return `http://127.0.0.1:${server.address().port}`;
 }
 
-// The diagnostic a non-retryable readiness failure carries.
+// The diagnostic a non-retryable readiness query error carries.
 const queryError = (stage, lastHttpStatus) => ({
   openclawCiDiagnostic: {
     kind: "metrics-monitoring",
@@ -143,7 +143,7 @@ test("Prometheus readiness retries an interrupted response body", async (t) => {
     attempts += 1;
     response.writeHead(200, { "content-type": "application/json" });
     if (attempts === 1) {
-      // Drop the connection after headers so the failure occurs while reading JSON.
+      // The failure occurs while reading the Prometheus JSON body.
       interruptBody(response);
       return;
     }
