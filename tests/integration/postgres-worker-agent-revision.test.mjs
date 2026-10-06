@@ -5094,15 +5094,21 @@ test(
     const fixture = await setup(context);
     const reason =
       "Existing Kubernetes namespace customer-support belongs to another tenant: its openclaw.dev/namespace label names a different Namespace.";
+    const timedOut = "Kubernetes API request timed out.";
     const results = [
-      { failure: "retryable", reason: "Kubernetes API request timed out." },
-      // A reason that is not bounded printable text is dropped, never logged.
+      { failure: "retryable", reason: timedOut },
+      // Only a failed pass keeps a reason, and only bounded printable text: the worker drops
+      // the rest itself, before the logger sees it.
+      { reason: timedOut },
       { failure: "retryable", reason: "line\nbreak" },
+      { failure: "retryable", reason: "x".repeat(257) },
       { failure: "permanent", reason },
     ];
     let attempts = 0;
+    let deletes = 0;
     const output = [];
-    const log = createWorkerLogEmitter(
+    const events = [];
+    const logger = createWorkerLogEmitter(
       createOccLogger({
         component: "occ-worker",
         destination: {
@@ -5117,9 +5123,24 @@ test(
         },
       }),
     );
+    const log = (event) => {
+      events.push(event);
+      logger(event);
+    };
     await fixture.start(
       {
         ...fixture.compute,
+        async deleteNamespace(target) {
+          deletes += 1;
+          return deletes === 1
+            ? {
+                namespaceId: target.id,
+                namespaceDeleted: false,
+                failure: "retryable",
+                reason: timedOut,
+              }
+            : { namespaceId: target.id, namespaceDeleted: true };
+        },
         async ensureNamespace(target) {
           const result = results[Math.min(attempts, results.length - 1)];
           attempts += 1;
@@ -5135,43 +5156,34 @@ test(
     await fixture.work(
       { id: namespace.id, idempotencyKey: `namespace:${namespace.id}:reconcile:ready` },
       "failed_permanent",
+      // The retries back off, under 10 s in all; the pending pass uses no attempt.
+      40_000,
     );
-    const completed = await waitFor("three logged Namespace passes", async () => {
-      const lines = output.filter(
+    const ensured = (lines) =>
+      lines.filter(
         (line) =>
           line.event === "worker.completed" &&
           line.namespaceId === namespace.id &&
           line.operation === "namespace.ensure",
       );
-      return lines.length === 3 ? lines : undefined;
-    });
+    const completed = await waitFor("every logged Namespace pass", async () =>
+      ensured(output).length === results.length ? ensured(output) : undefined,
+    );
+    const passes = [
+      ["retry", timedOut],
+      ["pending", undefined],
+      ["retry", undefined],
+      ["retry", undefined],
+      ["permanent", reason],
+    ];
     assert.deepEqual(
-      completed.map(({ operation, outcome, code, reason }) => ({
-        operation,
-        outcome,
-        code,
-        reason,
-      })),
-      [
-        {
-          operation: "namespace.ensure",
-          outcome: "retry",
-          code: "NAMESPACE_INCOMPLETE",
-          reason: "Kubernetes API request timed out.",
-        },
-        {
-          operation: "namespace.ensure",
-          outcome: "retry",
-          code: "NAMESPACE_INCOMPLETE",
-          reason: undefined,
-        },
-        {
-          operation: "namespace.ensure",
-          outcome: "permanent",
-          code: "NAMESPACE_INCOMPLETE",
-          reason,
-        },
-      ],
+      completed.map(({ outcome, code, reason }) => [outcome, code, reason]),
+      passes.map(([outcome, reason]) => [outcome, "NAMESPACE_INCOMPLETE", reason]),
+    );
+    // The worker's own events already lack the dropped reasons.
+    assert.deepEqual(
+      ensured(events).map((event) => event.reason),
+      passes.map(([, reason]) => reason),
     );
     const failed = await fixture.state.read((view) => view.namespaces.findNamespace(namespace.id));
     assert.equal(failed.status, "failed");
@@ -5184,6 +5196,25 @@ test(
     assert.ok(rows.length > 0);
     assert.equal(JSON.stringify(rows).includes("another tenant"), false);
     assert.equal(JSON.stringify(rows).includes("timed out"), false);
+    // A delete pass logs no reason, even when its Driver returns one.
+    await fixture.controller.deleteNamespace(fixture.actor.id, namespace.id);
+    await fixture.work(
+      { id: namespace.id, idempotencyKey: `namespace:${namespace.id}:reconcile:deleted` },
+      "succeeded",
+    );
+    const deleted = await waitFor("both Namespace delete passes", async () => {
+      const passes = events.filter(
+        (event) =>
+          event.event === "worker.completed" &&
+          event.namespaceId === namespace.id &&
+          event.operation === "namespace.delete",
+      );
+      return passes.length === 2 ? passes : undefined;
+    });
+    assert.deepEqual(
+      deleted.map((event) => Object.hasOwn(event, "reason")),
+      [false, false],
+    );
   },
 );
 
