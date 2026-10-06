@@ -48,14 +48,12 @@ runtime startup lane derives the reviewed Codex seccomp profile in an owned k3d
 cluster and requires `OCC_TEST_CODEX_SECCOMP_PROFILE`; the second runs no Codex
 sandbox, so it needs no cluster.
 
-Full Integration is manual and uses the immutable event commit. Lanes require
-`main` except `k3d-model`, which also accepts an `integration-model` branch
-allowlist. Environment gates apply only to lanes that declare one;
-`helper-timeout` and standalone `logging-collector` declare none. The ChatGPT
-`provider-account` lane is main-only without per-run approval; other model,
-routing, Slack, OpenShell, and additional OpenTelemetry lanes require approval.
-Missing selected prerequisites fail. A PR aggregate is not full credentialed coverage;
-targeted protected runs report only their selected lanes.
+Full Integration uses the immutable event commit. Lanes require `main` except
+`k3d-model` and `openshell`, which accept exact protected-environment branch
+rules. The main-only `provider-account` lane needs no per-run approval; other
+credentialed environments require approval. `helper-timeout` and standalone
+`logging-collector` have no environment gate. Missing inputs fail, and a targeted
+run proves only its selected lane.
 
 The `postgres` lane owns migration compatibility; `postgres-application` owns the
 revision-worker, IAM barrier, metrics and auth-maintain tests; `postgres-auth` owns sign-in,
@@ -184,32 +182,33 @@ cleanup removes the owned cluster and partial imports.
 The [CI workflow](../../.github/workflows/ci.yml) runs on pull requests, pushes to `main`, merge groups, and manual dispatch.
 [Full Integration](../../.github/workflows/full-integration.yml) runs only by
 manual dispatch, using the requested lane or `all`, not on pushes or merges. The
-`k3d-model` branch exception below does not enable other lanes outside `main`.
+`k3d-model` and `openshell` branch exceptions below do not enable other lanes outside `main`.
 `provider-account` remains manual because its configured admin credential cannot
 authenticate from the hosted runner.
 
 [Authoritative checked-in dispatcher](../../.github/workflows/clawsweeper-dispatch.yml); [setup/verification/recovery](../flows/clawsweeper-dispatch.md#setup-and-first-run-verification).
 
-### Run Kubernetes model tests before merge
+### Run protected model tests before merge
 
-A repository administrator must add the exact branch name to the
-`integration-model` environment's deployment rules, retaining `main`, required
-reviewers, and self-review prevention. Wildcards fail preflight. The reviewed
-branch gains access to the existing model credential only after reviewer approval.
+An administrator adds the exact branch to `integration-model` for `k3d-model` or
+`integration-openshell` for `openshell`, retaining `main`, required reviewers,
+and self-review prevention. Wildcards fail preflight. Credentials become
+available only after approval.
 
 ```sh
 gh workflow run full-integration.yml --ref '<approved-branch>' -f lane=k3d-model
+gh workflow run full-integration.yml --ref '<approved-branch>' -f lane=openshell
 ```
 
-The reviewer must inspect the run's commit before approval. Each job checks out
-immutable `github.sha`; moving the branch does not change an existing run.
-The dispatcher cannot approve their own run; a different collaborator must
-dispatch or approve. Remove the branch rule after the proof completes.
-Other lanes, including `all` and `provider-account`, remain main-only. This lane
-runs real Kubernetes topology tests, including embedded invalid-credential
-cutover and recovery, and the local first-Agent proof: a fresh installer deploys
-and reuses their own Agent, verifies real model responses, and cannot replace the
-credential after external changes. Ordinary fixture CI does not run these tests.
+The reviewer inspects the commit before approval. Jobs check out immutable
+`github.sha`; moving the branch does not change the run. The dispatcher cannot
+self-approve. Remove the branch rule after proof completes.
+Other lanes, including `all` and `provider-account`, remain main-only. The
+`k3d-model` lane runs real Kubernetes topology tests, including embedded
+invalid-credential cutover and recovery. The `openshell` lane runs the
+first-Agent proof with both Compose and Kubernetes control planes. Each proof
+deploys and reuses an Agent, verifies real model responses, and rejects credential
+replacement after external changes. Ordinary fixture CI does not run these tests.
 
 ### Integration tests outside automatic CI
 
