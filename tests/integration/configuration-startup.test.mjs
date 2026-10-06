@@ -712,7 +712,8 @@ test("production requires one YAML while development may start without a Configu
     await loadInstallationConfiguration({ mode: "development", environment: {} }),
     undefined,
   );
-  // A path the reader cannot use is refused by name, without the filesystem error.
+  // Unusable paths and unparsable files get fixed messages that never echo the path or the
+  // filesystem or parser error.
   const invalidYaml = await fixture(t);
   await writeFile(invalidYaml, "drivers: [\n", "utf8");
   for (const [path, message] of [
@@ -727,7 +728,7 @@ test("production requires one YAML while development may start without a Configu
     await assert.rejects(
       loadInstallationConfiguration({ mode: "production", environment: { OCC_CONFIG_PATH: path } }),
       { message },
-      path,
+      JSON.stringify(path),
     );
   }
 });

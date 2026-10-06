@@ -1523,7 +1523,8 @@ test(
       ),
     );
     assert.equal(Object.hasOwn(retried.body.error, "details"), false);
-    // Replaying the original request admits the stored plan again, so it is refused the same way.
+    // A replay of the original request rechecks the stored plan, so it is refused the same way
+    // and returns no progress.
     const provisionPath = `/namespaces/${namespace.id}/agents/provision`;
     const replayed = await switched.request("POST", provisionPath, { body });
     assert.equal(replayed.status, 400, JSON.stringify(replayed.body));
@@ -1532,7 +1533,11 @@ test(
       "SELECT state FROM occ.controller_work WHERE idempotency_key = $1",
       [admitted.data.provisioning.workId],
     );
-    assert.deepEqual(work.rows, [{ state: "failed_permanent" }], "a refused retry queues nothing");
+    assert.deepEqual(
+      work.rows,
+      [{ state: "failed_permanent" }],
+      "a refused retry or replay queues nothing",
+    );
   },
 );
 
