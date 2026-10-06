@@ -79,6 +79,10 @@ For each sequence, allocate one above its highest used number, with at least
 four digits. Inspect existing files, the index, and Git history so deleted or
 renamed records do not free numbers. Historical shared numbers through **41**
 are reserved in both sequences; new numbers start at **0042** or higher.
+RFC entry points must use unique numeric prefixes of at least four digits.
+The historical RFCs were renumbered as `0063`–`0079`; see the
+[old-to-new lookup](../../specs/README.md#renumbered-rfcs). Numbers `0043`–`0062`
+remain reserved by existing history and proposals under review.
 Recheck for collisions before creating a file and before merging. If concurrent
 branches allocate the same new ID, renumber the later unmerged document and
 update its links. Never overwrite an existing document.
@@ -169,7 +173,7 @@ authorized scope change is recorded. Acceptance of an RFC is not evidence of
 availability. Use [documentation checks](documentation.md#preview-and-check)
 for document-only changes, without running product tests.
 
-`pnpm docs:check` also checks non-archived specs for required RFC statuses and author logins,
+`pnpm docs:check` also checks non-archived specs for unique RFC numbers, required statuses and author logins,
 relative `rfc` references to RFC entry points, and local Markdown link targets.
 Run `node scripts/check-specs.mjs` for that check alone. It does not check remote
 URLs, heading fragments, or the meaning of a recorded decision. Three preserved
@@ -186,10 +190,11 @@ in the platform design.
 
 Preserve historical decisions, dates, evidence, recorded statuses, and Manual
 Notes. Keep mixed historical design and implementation records intact, choosing
-their home by primary purpose. Existing names, including duplicate numeric
-prefixes and date-based names, are grandfathered; documents with companions use
-those names for their directories and `index.md` for the main document. Refer to
-the full path when a number is ambiguous. Do not infer completion from placement or
+their home by primary purpose. Historical plan names, including duplicate numeric
+prefixes and date-based names, remain grandfathered. RFCs use unique numeric IDs; the old-to-new lookup
+preserves their previous names. Existing linked plans keep their filenames and
+point to the renumbered RFC through `rfc` frontmatter. Documents with companions
+use `index.md` for the main document. Do not infer completion from placement or
 rewrite historical content to match the new template.
 
 This first phase moves non-archived specifications and supporting evidence.

@@ -311,7 +311,8 @@ retroactively update the earlier spec to match the later implementation;
 preserve its original design decisions and implementation details.
 
 Use stable feature names in `docs/reference/` and preserve grandfathered
-specification names and IDs when grouping companions under `index.md`.
+plan names when grouping companions under `index.md`. RFCs require unique numeric
+IDs of at least four digits; keep the old-to-new lookup current when renumbering.
 This first organization phase preserves `specs/.archive/` content and placement;
 only the removed console-image links change to a preserved Git revision. Do not
 add new records to it. A behavior-changing implementation PR

@@ -10,7 +10,7 @@ status_note: "Deferred past 0.x; retained as direction, not an accepted release 
 
 **Status:** Direction; deferred past 0.x — not an MVP requirement.
 
-The 0.x scope is [Agent access](../36-agent-access.md#delivery-checkpoints) checkpoints 1-2 (share with existing people; enroll without grants); everything in this package is later direction.
+The 0.x scope is [Agent access](../0071-agent-access.md#delivery-checkpoints) checkpoints 1-2 (share with existing people; enroll without grants); everything in this package is later direction.
 
 **Owner:** OCC authorization and Agent invocation.
 

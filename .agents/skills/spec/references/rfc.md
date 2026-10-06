@@ -39,8 +39,8 @@ its decision status; do not duplicate the status in companions. When adding
 metadata to historical RFCs, use recorded decision evidence. If no decision is
 established, use `status: Unspecified` with a `status_note` explaining the gap,
 without rewriting historical body text. Recheck that the path and number are not
-already assigned before writing. Existing ambiguous historical numbers require
-a full filename or path, not a guessed match.
+already assigned before writing. Use the specification index's old-to-new lookup
+to resolve historical RFC names; never guess from a duplicated old number.
 
 State the proposed decision early, followed by the behavior and ownership needed
 to assess it. Include security and failure consequences beside the affected

@@ -44,7 +44,23 @@ const rfcEntries = new Set(
     return entry.name.endsWith(".md") ? [path.join(rfcs, entry.name)] : [];
   }),
 );
+const rfcIds = new Set();
 for (const file of rfcEntries) {
+  const name =
+    path.basename(file) === "index.md"
+      ? path.basename(path.dirname(file))
+      : path.basename(file, ".md");
+  const number = name.match(/^(\d{4,})-[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/)?.[1];
+  const id = Number(number);
+  if (!number || !Number.isSafeInteger(id) || id < 42) {
+    errors.push(
+      `${path.relative(root, file)}: RFC requires a numeric prefix of at least four digits (0042 or higher)`,
+    );
+  } else if (rfcIds.has(id)) {
+    errors.push(`${path.relative(root, file)}: duplicate RFC number ${number}`);
+  } else {
+    rfcIds.add(id);
+  }
   if (!fs.existsSync(file)) {
     errors.push(`${path.relative(root, file)}: missing RFC entry point`);
   }
@@ -142,7 +158,7 @@ if (errors.length) {
   process.exitCode = 1;
 } else {
   console.log(
-    `Validated ${files.length} spec documents, ${rfcEntries.size} RFC statuses and authors, and ${links} local link targets.`,
+    `Validated ${files.length} spec documents, ${rfcEntries.size} RFC numbers, statuses and authors, and ${links} local link targets.`,
   );
 }
 if (historicalLinks) {
