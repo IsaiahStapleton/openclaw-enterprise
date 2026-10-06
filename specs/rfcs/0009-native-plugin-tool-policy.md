@@ -1,10 +1,13 @@
 ---
+owner: "stevenlee-oai"
 author: stevenlee-oai
 implementation_status: Partially implemented
 status: Proposed
 ---
 
 # Native OpenClaw plugin tool policies
+
+**Owner:** [@stevenlee-oai](https://github.com/stevenlee-oai) (original RFC author; [PR #310](https://github.com/openclaw/openclaw-enterprise/pull/310)).
 
 Status: Proposed. Full policy coverage is requested; the configuration surface
 and native automatic-review semantics below await acceptance.

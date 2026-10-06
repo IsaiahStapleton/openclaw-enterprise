@@ -1,10 +1,13 @@
 ---
+owner: "stevenlee-oai"
 author: stevenlee-oai
 implementation_status: Partially implemented
 status: Proposed
 ---
 
 # Plugin policy enforcement
+
+**Owner:** [@stevenlee-oai](https://github.com/stevenlee-oai) (original RFC author; [PR #360](https://github.com/openclaw/openclaw-enterprise/pull/360)).
 
 Status: **Proposed for alignment**, 2026-09-24. Draft implementation: [#362](https://github.com/openclaw/openclaw-enterprise/pull/362).
 The common policy model below records the agreed direction. Recommendations

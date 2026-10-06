@@ -116,6 +116,13 @@ for (const file of files) {
       ) {
         throw new Error("RFC requires an author GitHub login in frontmatter (without @)");
       }
+      if (
+        typeof data.owner !== "string" ||
+        !data.owner.trim() ||
+        data.owner === "github-login-or-team"
+      ) {
+        throw new Error("RFC requires an owner person or team in frontmatter");
+      }
       if (!implementationStatuses.has(data.implementation_status)) {
         throw new Error("RFC requires a valid implementation_status in frontmatter");
       }
@@ -172,7 +179,7 @@ if (errors.length) {
   process.exitCode = 1;
 } else {
   console.log(
-    `Validated ${files.length} spec documents, ${rfcEntries.size} RFC numbers, statuses and authors, and ${links} local link targets.`,
+    `Validated ${files.length} spec documents, ${rfcEntries.size} RFC numbers, statuses, authors and owners, and ${links} local link targets.`,
   );
 }
 if (historicalLinks) {

@@ -91,9 +91,10 @@ number, starting at `0042` or higher; check `specs/plans/` and Git history so de
 or renamed task plans do not free numbers.
 
 Keep one row per RFC in `specs/README.md`, with its linked number and name in
-the first column, its `implementation_status` in the second, and concise notes
-in the third. Link current evidence and identify material gaps for partial work.
-Update the row when the RFC’s name or implementation status changes. Link an RFC and its plan to each other; plans
+the first column, its `implementation_status` in the second, concise notes
+in the third, and its owner in the fourth. Link current evidence and identify
+material gaps for partial work. Update the row when the RFC’s name,
+implementation status, or owner changes. Link an RFC and its plan to each other; plans
 are not listed in the RFC index. If a standalone task later gains an RFC, retain
 its task ID and path and add the relationship.
 
@@ -123,14 +124,15 @@ and recordings remain outside the repository, as required by
 ## Status and review
 
 The RFC’s frontmatter records decision and implementation status separately.
-Every RFC entry point must begin with `status`, `implementation_status`, and
-`author`:
+Every RFC entry point must begin with `status`, `implementation_status`,
+`author`, and `owner`:
 
 ```yaml
 ---
 status: Proposed
 implementation_status: Not implemented
 author: github-login
+owner: github-login-or-team
 ---
 ```
 
@@ -140,6 +142,13 @@ use the contributor who will open its PR. When backfilling, follow file history
 through renames and use the original PR author, not a later editor or merger.
 Do not replace authorship with a responsible team; describe responsibilities in
 the proposal.
+
+`owner` names the person or team responsible for the RFC. Preserve an explicitly
+recorded owner; when none is listed, use the verified original RFC PR author and
+identify that fallback beside the visible owner line. Keep author attribution
+unchanged when ownership differs. Show the owner near the RFC title and in the
+index; link a person's GitHub profile when known. Update all three representations
+together. Companions inherit ownership from their parent RFC.
 
 Companion Markdown notes have an `rfc` frontmatter link to the owning entry
 point, relative to the note (usually `rfc: index.md`). Read the decision status
