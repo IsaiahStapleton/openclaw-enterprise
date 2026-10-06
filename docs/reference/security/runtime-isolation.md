@@ -20,9 +20,10 @@ its Gateway use the existing capability-token app-server protocol over
 `ws://`; the server verifies the token's SHA-256 digest.
 This connection does not implement mutual TLS.
 Embedded OpenClaw retains its combined data-plane workload; its transport token
-and Gateway password are separate Secrets, as in dedicated mode, and an Agent
-deployed before that split keeps its combined transport Secret until its next
-deployment.
+and Gateway password are separate Secrets, as in dedicated mode. For an Agent
+deployed before that split, its next deployment copies the password from the
+combined transport Secret into the separate Secret and keeps the combined key for
+older Gateway Pods.
 
 The initial credential API requires exact Agent read and operate access, a ready
 Namespace, and no historical revisions. It generates an app-server transport
