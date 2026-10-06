@@ -7315,6 +7315,8 @@ test("the official Kubernetes client rejects ambiguous identity and insecure API
       },
       scenario.name,
     );
+    // The refusal names the kubeconfig check, not the generic fallback.
+    assert.match(refused.reason, /kube/i, scenario.name);
   }
 
   // The safe kubeconfig these scenarios depart from passes validation and fails only at the

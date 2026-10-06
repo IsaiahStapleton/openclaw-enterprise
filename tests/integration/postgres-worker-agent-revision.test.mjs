@@ -5138,7 +5138,10 @@ test(
     );
     const completed = await waitFor("three logged Namespace passes", async () => {
       const lines = output.filter(
-        (line) => line.event === "worker.completed" && line.namespaceId === namespace.id,
+        (line) =>
+          line.event === "worker.completed" &&
+          line.namespaceId === namespace.id &&
+          line.operation === "namespace.ensure",
       );
       return lines.length === 3 ? lines : undefined;
     });
