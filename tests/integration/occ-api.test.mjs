@@ -3309,6 +3309,36 @@ test("Agent plugin maps reject structural errors and preserve exact authorizatio
   assert.equal(failedAudit.body.error.code, "DEPENDENCY_UNAVAILABLE");
   const afterAuditFailure = await controller.request("GET", agentPath);
   assert.deepEqual(afterAuditFailure.data, beforeAuditFailure.data);
+
+  // After the Installation switches Plugin Drivers, the Agent's stored selection is refused
+  // where the plugins are read from storage: an update that omits plugins and a bodiless
+  // deploy. The message still names the plugin, but no detail points into a request body
+  // the caller never sent.
+  await controller.fixture.controller.handleNamespaceLifecycle(
+    controller.fixture.principal.id,
+    namespace.id,
+    "ready",
+  );
+  await bindHarnessKey(controller.fixture, namespace.id, agent.data);
+  const beforeDriverSwitch = await controller.request("GET", agentPath);
+  const codexPluginDriver = new CodexPluginDriver();
+  controller.fixture.controller.registerDriver(codexPluginDriver);
+  controller.fixture.controller.selectDriver("plugin", codexPluginDriver.id);
+  const storedUpdate = await controller.request("PATCH", agentPath, {
+    body: { configurationId: configuration.id },
+  });
+  const storedDeploy = await controller.request("POST", `${agentPath}/deploy`);
+  for (const response of [storedUpdate, storedDeploy]) {
+    assert.equal(response.status, 400, JSON.stringify(response.body));
+    assert.equal(response.body.error.code, "INVALID_REQUEST");
+    assert.match(
+      response.body.error.message,
+      /^A plugin selection names a plugin that the selected Plugin Driver \(codex-plugin\) does not offer: occ-plugin:diffs\./,
+    );
+    assert.equal(Object.hasOwn(response.body.error, "details"), false);
+  }
+  const afterStoredRefusal = await controller.request("GET", agentPath);
+  assert.deepEqual(afterStoredRefusal.data, beforeDriverSwitch.data);
 });
 
 test("native ServiceAccounts keep private credential references and cannot admit Harness authentication", async () => {

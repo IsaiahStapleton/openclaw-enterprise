@@ -621,8 +621,9 @@ export class PluginPolicyValidationError extends Error {
     let message = "The supplied plugin policies are invalid.";
     if (field === "unknownPlugin") {
       // driverId comes from trusted Installation configuration, never from the request.
-      // pluginId is the caller's own selection key; the API contract limits it to
-      // [A-Za-z0-9._~:@-]. It follows the rule, so HTTP's message cap cuts the advice first.
+      // pluginId is a selection key admitted under the API contract's [A-Za-z0-9._~:@-] rule,
+      // from this request or from storage. It follows the rule, so HTTP's message cap cuts
+      // the advice first.
       message = `A plugin selection names a plugin that the selected Plugin Driver${
         driverId === undefined ? "" : ` (${driverId})`
       } does not offer${
@@ -646,6 +647,17 @@ export class PluginPolicyValidationError extends Error {
     if (field === "unknownPlugin" && pluginId !== undefined) {
       this.pluginId = pluginId;
     }
+  }
+
+  /**
+   * The same refusal without the `/plugins/<id>` pointer, for selections read from storage
+   * (deploy, an update that omits `plugins`, provisioning replay or retry): the request body
+   * holds no such path. The message still names the plugin.
+   */
+  withoutRequestPath(): PluginPolicyValidationError {
+    const stored = new PluginPolicyValidationError();
+    stored.message = this.message;
+    return stored;
   }
 }
 

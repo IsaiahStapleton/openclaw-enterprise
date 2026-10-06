@@ -5356,6 +5356,7 @@ export class OpenClawController {
       this.validatePluginPolicies(
         plugins ?? agent.plugins,
         pluginApprovers === null ? undefined : (pluginApprovers ?? agent.pluginApprovers),
+        plugins === undefined ? "stored" : "request",
       );
       const updated = await state.agents.updateConfiguration(
         namespace.id,
@@ -5659,7 +5660,11 @@ export class OpenClawController {
           ? undefined
           : (() => {
               const driver = this.pluginDriver();
-              driver.validatePolicies(lockedAgent.plugins, lockedAgent.pluginApprovers);
+              this.validatePluginPolicies(
+                lockedAgent.plugins,
+                lockedAgent.pluginApprovers,
+                "stored",
+              );
               return immutableCopy({
                 driver: { id: driver.id, implementation: driver.implementation },
                 plugins: lockedAgent.plugins,
@@ -6848,6 +6853,7 @@ export class OpenClawController {
     this.validatePluginPolicies(
       normalizeAgentPlugins(record.plan.plugins as PluginDesiredState | undefined),
       normalizeAgentPluginApprovers(record.plan.pluginApprovers as PluginApprovers | undefined),
+      "stored",
     );
     if (agent !== undefined) {
       this.admitRepositoryCredentials(
@@ -8270,12 +8276,21 @@ export class OpenClawController {
   private validatePluginPolicies(
     plugins: PluginDesiredState | undefined,
     pluginApprovers?: PluginApprovers,
+    source: "request" | "stored" = "request",
   ): void {
     if (
       (plugins !== undefined && Object.keys(plugins).length > 0) ||
       (pluginApprovers !== undefined && pluginApprovers.length > 0)
     ) {
-      this.pluginDriver().validatePolicies(plugins ?? {}, pluginApprovers);
+      try {
+        this.pluginDriver().validatePolicies(plugins ?? {}, pluginApprovers);
+      } catch (error) {
+        // Stored selections are not the caller's request body: keep the message, drop the path.
+        if (source === "stored" && error instanceof PluginPolicyValidationError) {
+          throw error.withoutRequestPath();
+        }
+        throw error;
+      }
     }
   }
 

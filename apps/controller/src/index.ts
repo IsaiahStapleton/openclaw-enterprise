@@ -7,6 +7,7 @@ import {
   AgentRuntimeLogsResponse,
   AgentRuntimeResponse,
   CredentialSourceResponse,
+  ErrorDetail as ErrorDetailSchema,
   ErrorResponse,
   JsonValue,
   occApiRoutes,
@@ -2451,7 +2452,12 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           type: "object",
           additionalProperties: false,
           required: ["code", "message"],
-          properties: { code: { type: "string" }, message: { type: "string" } },
+          properties: {
+            code: { type: "string" },
+            message: { type: "string" },
+            // Schema 400s point at the rejected field; without this the serializer drops it.
+            details: { type: "array", maxItems: 32, items: ErrorDetailSchema },
+          },
         },
         meta,
       },
@@ -3418,6 +3424,9 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
             },
           },
           response: {
+            // A browser Origin other than the console's, or a cross-site fetch, is refused
+            // before the credentials are read.
+            403: { description: "Forbidden", ...error },
             ...responses({
               type: "object",
               additionalProperties: false,
@@ -3427,6 +3436,7 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
                 sessionKey: { type: "string" },
               },
             }),
+            400: { description: "Bad Request", ...error },
             429: { description: "Too Many Requests", ...error },
           },
         },
@@ -3442,7 +3452,11 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
           description: "Revokes the current user session cookie.",
           tags: ["Authentication"],
           security: [{ sessionCookie: [] }],
-          response: responses({ type: "object", additionalProperties: true }),
+          response: {
+            ...responses({ type: "object", additionalProperties: true }),
+            // A missing or foreign browser Origin, or a cross-site fetch.
+            403: { description: "Forbidden", ...error },
+          },
         },
       },
       async (request, reply) => options.auth.signOut(request, reply),

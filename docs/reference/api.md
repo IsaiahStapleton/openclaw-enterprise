@@ -1109,7 +1109,9 @@ Sign in with email and password
 | Status | Meaning |
 | --- | --- |
 | `200` | OK |
+| `400` | Bad Request |
 | `401` | Unauthorized |
+| `403` | Forbidden |
 | `429` | Too Many Requests |
 | `503` | Service Unavailable |
 
@@ -1139,6 +1141,7 @@ Sign out of the current session
 | --- | --- |
 | `200` | OK |
 | `401` | Unauthorized |
+| `403` | Forbidden |
 | `503` | Service Unavailable |
 
 **`200` response body:** `application/json`
