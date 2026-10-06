@@ -453,10 +453,12 @@ class ConfigurationFailure extends Error {}
 /**
  * A gateway setting in the caller's own Configuration that Kubernetes Compute cannot
  * provision. It names the setting's path and what is accepted, never the submitted value.
- * Deployment treats it as any other ConfigurationFailure; provisioning validation reports it
- * to the caller as a ComputeGatewaySettingError.
+ * Deployment admission and provisioning validation report it to the caller as a
+ * ComputeGatewaySettingError; preparation treats it as any other ConfigurationFailure.
  * TODO: raise it for trustedProxy.allowUsers too once open #906, which rewrites that check,
- * lands or closes; until then that refusal keeps the fixed 409 text and a logged reason.
+ * lands or closes; until then that refusal keeps the fixed 409 text and a logged reason at
+ * provisioning, and fails a deployment only in preparation. Because that check runs before
+ * the allowLoopback and identityScopes checks, a refused allowUsers also hides those.
  */
 class GatewaySettingFailure extends ConfigurationFailure {
   readonly setting: string;
@@ -2605,19 +2607,34 @@ export class KubernetesComputeDriver implements ComputeDriver {
         "Kubernetes Agent provisioning supports only dedicated execution mode.",
       );
     }
-    let configuration: OpenClawConfigurationDocument;
+    this.verifyGatewayRoutingConfiguration({
+      configuration: this.namedGatewayConfigurationDocument(input.configuration),
+      harness: { id: "codex", version: "provisioning", mode: "dedicated" },
+    });
+  }
+
+  validateGatewaySettings(configuration: Readonly<OpenClawConfigurationDocument>): void {
     try {
-      configuration = this.kubernetesGatewayConfigurationDocument(input.configuration);
+      this.namedGatewayConfigurationDocument(configuration);
+    } catch (error) {
+      if (error instanceof ComputeGatewaySettingError) {
+        throw error;
+      }
+      // Other refusals (trustedProxy.allowUsers until open #906) stay with preparation.
+    }
+  }
+
+  private namedGatewayConfigurationDocument(
+    configuration: Readonly<OpenClawConfigurationDocument>,
+  ): OpenClawConfigurationDocument {
+    try {
+      return this.kubernetesGatewayConfigurationDocument(configuration);
     } catch (error) {
       if (error instanceof GatewaySettingFailure) {
         throw new ComputeGatewaySettingError(error.setting, error.requirement);
       }
       throw error;
     }
-    this.verifyGatewayRoutingConfiguration({
-      configuration,
-      harness: { id: "codex", version: "provisioning", mode: "dedicated" },
-    });
   }
 
   validateHarnessAuth(

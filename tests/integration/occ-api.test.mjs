@@ -5666,7 +5666,9 @@ test("deploy reports Configuration content a Compute Driver names as unsupported
   const computeDriver = createProvisioningCapableComputeDriver();
   let refusal;
   computeDriver.validateHarnessAuth = () => {
-    throw refusal;
+    if (refusal !== undefined) {
+      throw refusal;
+    }
   };
   const fixture = await createInjectedFixture({ computeDriver });
   const controller = {
@@ -5698,6 +5700,53 @@ test("deploy reports Configuration content a Compute Driver names as unsupported
     "The selected Compute Driver cannot deliver this Harness authentication binding to the configured model and topology.",
   );
   assert.doesNotMatch(JSON.stringify(generic.body), /internal driver detail/);
+
+  // A gateway setting Kubernetes Compute refuses would fail every preparation attempt as an
+  // unavailable dependency; admission names it without its value, as provisioning does.
+  refusal = undefined;
+  const kubernetes = createTestKubernetesComputeDriver("compute-deploy-gateway-settings");
+  computeDriver.validateGatewaySettings = (configuration) =>
+    kubernetes.validateGatewaySettings(configuration);
+  for (const [name, gateway, message] of [
+    [
+      "gateway-token-agent",
+      { auth: { mode: "token" } },
+      "Configuration setting gateway.auth.mode must be trusted-proxy: Kubernetes Compute supports only native trusted-proxy gateway authentication.",
+    ],
+    [
+      "gateway-proxies-agent",
+      { trustedProxies: ["10.99.0.0/16"] },
+      "Configuration setting gateway.trustedProxies must be omitted or match the Installation's network.gatewayTrustedProxyCidrs.",
+    ],
+  ]) {
+    const refusedAgent = await createAgent(controller, namespace.id, name, { gateway });
+    await bindHarnessKey(fixture, namespace.id, refusedAgent);
+    const refused = await controller.request(
+      "POST",
+      `/namespaces/${namespace.id}/agents/${refusedAgent.id}/deploy`,
+    );
+    assert.equal(refused.status, 409, JSON.stringify(refused.body));
+    assert.deepEqual(
+      { code: refused.body.error.code, message: refused.body.error.message },
+      { code: "RESOURCE_CONFLICT", message },
+    );
+    assert.doesNotMatch(JSON.stringify(refused.body), /10\.99\./);
+    const revisions = await controller.request(
+      "GET",
+      `/namespaces/${namespace.id}/agents/${refusedAgent.id}/revisions`,
+    );
+    assert.deepEqual(revisions.data, [], JSON.stringify(revisions.body));
+  }
+  // A setting Compute leaves to preparation is admitted as before.
+  const allowUsersAgent = await createAgent(controller, namespace.id, "gateway-allow-users-agent", {
+    gateway: { auth: { mode: "trusted-proxy", trustedProxy: { allowUsers: ["someone"] } } },
+  });
+  await bindHarnessKey(fixture, namespace.id, allowUsersAgent);
+  const admitted = await controller.request(
+    "POST",
+    `/namespaces/${namespace.id}/agents/${allowUsersAgent.id}/deploy`,
+  );
+  assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
 });
 
 test("deploy audit preserves its authorization decision and rolls back with append failure", async () => {
