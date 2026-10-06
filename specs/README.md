@@ -1,7 +1,23 @@
-# RFCs
+# Specifications
+
+This directory holds architectural decisions and implementation plans:
+
+```text
+specs/
+  rfcs/      Architectural proposals and decisions
+  plans/     Implementation plans and delivery records
+  .archive/  Preserved historical specifications
+```
+
+An RFC defines a decision; a plan describes its implementation. Plans can also
+stand alone, and link relevant RFCs through `rfc` frontmatter. Use one Markdown
+file per document, or a folder with `index.md` when companions are needed.
+See the [specification process](../docs/contributing/specifications.md) for
+authoring, numbering, and review.
+
+## RFCs
 
 Status reflects each RFC’s recorded decision, not implementation or release availability.
-See the [specification process](../docs/contributing/specifications.md) for authoring and review.
 
 | RFC                                                                                                               | Status      |
 | ----------------------------------------------------------------------------------------------------------------- | ----------- |
