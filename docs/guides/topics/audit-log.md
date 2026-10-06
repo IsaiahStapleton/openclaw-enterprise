@@ -10,7 +10,14 @@ Collector do not export or replace this record.
 
 An event identifies when it occurred, the Installation, actor, action, affected
 resource, and outcome. It can also include a Namespace, request ID, or
-authorization decision when available. For example, service API key issuance and
+authorization decision when available. A denial's decision names the exact
+permission and resource that was refused, which can differ from the action. An
+Agent update refused for a missing `operate` on the Agent's Secret records
+`openclaw.agents.update` with a decision for `operate` on that Secret. When the
+Agent's own service principal is refused, the event has reason code
+`AGENT_PRINCIPAL_NOT_AUTHORIZED` and its details name that principal and the
+refused grant. Other refusals record nothing, such as `401` for a missing
+credential or `400` for an invalid request, even after authorization passed. For example, service API key issuance and
 revocation record the administrator and the non-secret key and principal IDs,
 not the credential. The audit event contract does not represent a general log of
 all successful reads, Agent prompts, or model responses.
@@ -20,6 +27,9 @@ state: each retry, permanent failure, expired claim, and completion. A pass that
 leaves work waiting, such as a deployment whose runtime is still starting, is
 recorded only when its result differs from the work item's previous one, so a
 deployment that waits for minutes writes one waiting event, not one per check.
+Each event's details carry `workId`, `reasonCode` and `attemptCount`. A retry and
+the final failure look the same. The final one is the `failure` event whose
+`attemptCount` reaches the worker's attempt limit, 5 by default.
 Authorization denials and lifecycle events such as revision activation are
 always recorded. An external sign-in callback that matches no pending attempt is
 not: anyone can send one, so the API counts it in a
