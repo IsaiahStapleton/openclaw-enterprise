@@ -95,6 +95,8 @@ import type {
   HarnessAuthSnapshot,
 } from "@openclaw-enterprise/contracts";
 import {
+  isName,
+  NAME_RULE,
   normalizeInitialWorkspaceFiles,
   normalizeWorkspaceDefaultsId,
   PERMISSION_ACTIONS,
@@ -817,12 +819,6 @@ function provisioningFailureMessage(code: string, error: unknown): string {
   return "Agent provisioning could not complete.";
 }
 
-// At most 200 characters counted as code points, as the API contract (JSON Schema
-// maxLength) and PostgreSQL char_length count them, not UTF-16 code units.
-function validName(value: unknown): value is string {
-  return isNonEmptyString(value) && Array.from(value).length <= 200;
-}
-
 type PluginDiscoveryCredential = {
   readonly accessToken?: string;
   readonly secretRef?: SecretReference;
@@ -1088,8 +1084,13 @@ export class OpenClawController {
   private readonly configuredServiceAccountDriverId: string | undefined;
 
   constructor(installation: Installation, options: ControllerOptions = {}) {
-    if (!isNonEmptyString(installation.id) || !validName(installation.name)) {
+    if (!isNonEmptyString(installation.id)) {
       throw new ScopeViolationError("The controller requires one valid server-owned Installation.");
+    }
+    if (!isName(installation.name)) {
+      throw new ScopeViolationError(
+        `The stored Installation name breaks the Name rule: ${NAME_RULE}.`,
+      );
     }
     if (
       !isNonEmptyString(installation.createdAt) ||
@@ -1111,8 +1112,10 @@ export class OpenClawController {
     this.defaultPresets = immutableCopy(options.defaultPresets ?? []);
     const presetNames = new Set<string>();
     for (const preset of this.defaultPresets) {
-      if (!validName(preset.name) || presetNames.has(preset.name)) {
-        throw new PresetValidationError("Default Presets require distinct valid names.");
+      if (!isName(preset.name) || presetNames.has(preset.name)) {
+        throw new PresetValidationError(
+          `Default Presets require distinct names that follow the Name rule: ${NAME_RULE}.`,
+        );
       }
       presetNames.add(preset.name);
     }
@@ -1375,7 +1378,7 @@ export class OpenClawController {
 
   async createIAMRole(principalId: string, input: CreateIAMRoleInput): Promise<Readonly<Role>> {
     const permissions = this.iamRolePermissions(input.permissions);
-    if (input.name !== undefined && !validName(input.name)) {
+    if (input.name !== undefined && !isName(input.name)) {
       throw new IAMPolicyValidationError("/name", "The IAM Role name is invalid.");
     }
     const namespace = await this.admitIAMPolicyOperation(principalId, input.namespaceId);
@@ -1877,7 +1880,7 @@ export class OpenClawController {
     auditEvent?: (result: Readonly<ProvisionAgentResult>) => AuditEvent,
   ): Promise<Readonly<ProvisionAgentResult>> {
     const requestId = requireProvisioningRequestId(input.requestId);
-    if (!validName(input.name)) {
+    if (!isName(input.name)) {
       throw new ScopeViolationError("The Agent name is invalid.");
     }
     const configurationInput = normalizeProvisioningConfiguration(input.configuration);
@@ -3084,7 +3087,7 @@ export class OpenClawController {
     principalId: string,
     input: CreateNamespaceInput,
   ): Promise<Readonly<Namespace>> {
-    if (!validName(input.name)) {
+    if (!isName(input.name)) {
       throw new ScopeViolationError("The Namespace name is invalid.");
     }
     return this.mutate(async (state) => {
@@ -3355,7 +3358,7 @@ export class OpenClawController {
   }
 
   async createPreset(principalId: string, input: CreatePresetInput): Promise<Readonly<Preset>> {
-    if (!validName(input.name)) {
+    if (!isName(input.name)) {
       throw new PresetValidationError("The Preset name is invalid.");
     }
     this.namespaceIdentity(input.namespaceId);
@@ -3419,7 +3422,7 @@ export class OpenClawController {
   }
 
   async updatePreset(principalId: string, input: UpdatePresetInput): Promise<Readonly<Preset>> {
-    if (input.name !== undefined && !validName(input.name)) {
+    if (input.name !== undefined && !isName(input.name)) {
       throw new PresetValidationError("The Preset name is invalid.");
     }
     this.namespaceIdentity(input.namespaceId);
@@ -3536,7 +3539,7 @@ export class OpenClawController {
     input: CreateSecretInput,
   ): Promise<Readonly<SecretMetadata>> {
     this.validateSecretValue(input.value);
-    if (!validName(input.name)) {
+    if (!isName(input.name)) {
       throw new ScopeViolationError("The Secret name is invalid.");
     }
     this.namespaceIdentity(input.namespaceId);
@@ -3678,7 +3681,7 @@ export class OpenClawController {
     audit?: (source: Readonly<CredentialSourceMetadata>) => AuditEvent,
   ): Promise<Readonly<CredentialSourceMetadata & { readonly status?: CredentialSourceStatus }>> {
     this.assertCredentialSourceTransactionBoundary();
-    if (!validName(input.name)) {
+    if (!isName(input.name)) {
       throw new ScopeViolationError("The credential source name is invalid.");
     }
     const config = Object.freeze({ ...(input.config ?? {}) });
@@ -4090,7 +4093,7 @@ export class OpenClawController {
     principalId: string,
     input: CreateServiceAccountInput,
   ): Promise<Readonly<ServiceAccount>> {
-    if (!validName(input.name)) {
+    if (!isName(input.name)) {
       throw new ScopeViolationError("The ServiceAccount name is invalid.");
     }
     this.namespaceIdentity(input.namespaceId);
@@ -5272,7 +5275,7 @@ export class OpenClawController {
   }
 
   async createAgent(principalId: string, input: CreateAgentInput): Promise<Readonly<Agent>> {
-    if (!validName(input.name)) {
+    if (!isName(input.name)) {
       throw new ScopeViolationError("The Agent name is invalid.");
     }
     if (!isNonEmptyString(input.configurationId)) {
@@ -7360,7 +7363,7 @@ export class OpenClawController {
         throw new ScopeViolationError("The provisioning plan is invalid.");
       }
       const name = planRecord?.name;
-      if (!isNonEmptyString(name) || !validName(name)) {
+      if (!isName(name)) {
         throw new ScopeViolationError("The provisioning Agent name is invalid.");
       }
       if (plan.harnessAuth === null || plan.harnessAuth.method === "runtime") {

@@ -409,6 +409,109 @@ test("Installation ownership is server-selected, detached, and immutable", () =>
   }, TypeError);
 });
 
+// Names the API's Name schema refuses but a length-and-blankness check accepts: a C1 control,
+// line and paragraph separators, edge Unicode whitespace and a lone surrogate.
+const namesOutsideTheNameRule = [
+  "name\u0085x",
+  "name\u2028x",
+  "name\u2029x",
+  "name\u00a0",
+  "\u3000name",
+  "name\ud800x",
+];
+
+test("a stored Installation or configured default Preset name follows the API Name rule", () => {
+  // 200 code points with an interior NBSP is a valid Name.
+  const longest = `name\u00a0${"😀".repeat(195)}`;
+  assert.equal(
+    new OpenClawController({ ...installation, name: longest }).installation.name,
+    longest,
+  );
+  for (const name of namesOutsideTheNameRule) {
+    assert.throws(
+      () => new OpenClawController({ ...installation, name }),
+      (error) =>
+        error instanceof ScopeViolationError &&
+        /^The stored Installation name breaks the Name rule: 1 to 200 characters/.test(
+          error.message,
+        ),
+      JSON.stringify(name),
+    );
+    assert.throws(
+      () =>
+        new OpenClawController(installation, {
+          defaultPresets: [{ name, template: { agent: {} } }],
+        }),
+      /Default Presets require distinct names that follow the Name rule: 1 to 200 characters/,
+      JSON.stringify(name),
+    );
+  }
+});
+
+test("direct controller creates and renames apply the API Name rule", async () => {
+  const { controller } = createController();
+  const namespaceId = "ns_00000000-0000-4000-8000-000000000999";
+  for (const name of namesOutsideTheNameRule) {
+    const label = JSON.stringify(name);
+    await assert.rejects(
+      controller.createNamespace("principal-admin", { name }),
+      {
+        message: "The Namespace name is invalid.",
+      },
+      label,
+    );
+    await assert.rejects(
+      controller.createAgent("principal-admin", { namespaceId, name, configurationId: "cfg_a" }),
+      { message: "The Agent name is invalid." },
+      label,
+    );
+    await assert.rejects(
+      controller.provisionAgent("principal-admin", {
+        namespaceId,
+        requestId: "request-a",
+        name,
+        configuration: {},
+      }),
+      { message: "The Agent name is invalid." },
+      label,
+    );
+    await assert.rejects(
+      controller.createSecret("principal-admin", { namespaceId, name, value: "synthetic" }),
+      { message: "The Secret name is invalid." },
+      label,
+    );
+    await assert.rejects(
+      controller.createPreset("principal-admin", { namespaceId, name, template: { agent: {} } }),
+      { message: "The Preset name is invalid." },
+      label,
+    );
+    await assert.rejects(
+      controller.updatePreset("principal-admin", { namespaceId, presetId: "preset-a", name }),
+      { message: "The Preset name is invalid." },
+      label,
+    );
+    await assert.rejects(
+      controller.createCredentialSource("principal-admin", { namespaceId, name, config: {} }),
+      { message: "The credential source name is invalid." },
+      label,
+    );
+    await assert.rejects(
+      controller.createServiceAccount("principal-admin", { namespaceId, name }),
+      { message: "The ServiceAccount name is invalid." },
+      label,
+    );
+    await assert.rejects(
+      controller.createIAMRole("principal-admin", {
+        namespaceId,
+        name,
+        permissions: [{ action: "read", resourceKind: "agent" }],
+      }),
+      { message: "The IAM Role name is invalid." },
+      label,
+    );
+  }
+});
+
 test("authorized resources retain exact Namespace ownership without metadata-only work", async () => {
   const { controller, calls } = createController();
   const namespace = await controller.createNamespace("principal-admin", {
