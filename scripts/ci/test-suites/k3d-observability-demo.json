@@ -23,7 +23,8 @@
       "path": "tests/integration/observability-demo-chart.test.mjs",
       "expectedTests": [
         "demo Grafana keeps its disposable SQLite database off node disk",
-        "demo guide install can be rerun after a cold-cache wait timeout"
+        "demo guide install can be rerun after a cold-cache wait timeout",
+        "demo chart refuses image digests that are not lowercase SHA-256"
       ]
     },
     {

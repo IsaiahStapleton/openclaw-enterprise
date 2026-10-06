@@ -2079,7 +2079,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
       ["Agent", options.images.agent],
     ] as const) {
       required(image, `${description} image`);
-      if (options.images.requireImmutableDigest && !/@sha256:[a-f0-9]{64}$/i.test(image)) {
+      if (options.images.requireImmutableDigest && !/@sha256:[a-f0-9]{64}$/.test(image)) {
         throw new ConfigurationFailure(
           `${description} image must use an immutable SHA-256 digest.`,
         );

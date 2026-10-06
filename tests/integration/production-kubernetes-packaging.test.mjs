@@ -1578,6 +1578,10 @@ test(
   async () => {
     for (const [overrides, message] of [
       [{ "repositoryCredentials.image": "repository-credentials:latest" }, /immutable SHA-256/],
+      [
+        { "repositoryCredentials.image": `repository-credentials@sha256:${"B".repeat(64)}` },
+        /immutable SHA-256/,
+      ],
       [{ "repositoryCredentials.backendId": "" }, /backendId is required/],
       [{ "repositoryCredentials.registryConfigMapName": "" }, /registryConfigMapName is required/],
       [{ "repositoryCredentials.publicCaSecretName": "repository-tls" }, /dedicated Secret/],
@@ -2650,6 +2654,15 @@ test(
   async () => {
     for (const [description, override] of [
       ["mutable controller", { "images.controller": "registry.example/controller:latest" }],
+      // OCI SHA-256 digests are `sha256` and lowercase hex; containerd refuses other spellings.
+      [
+        "uppercase controller digest",
+        { "images.controller": `registry.example/controller@sha256:${"A".repeat(64)}` },
+      ],
+      [
+        "uppercase controller digest algorithm",
+        { "images.controller": `registry.example/controller@SHA256:${"a".repeat(64)}` },
+      ],
       ["missing Better Auth secret", { "auth.secretName": "" }],
       ["missing bootstrap admin email", { "bootstrap.adminEmail": "" }],
       ["missing bootstrap password claim", { "bootstrap.password.claimName": "" }],

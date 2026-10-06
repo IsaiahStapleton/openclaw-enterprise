@@ -270,6 +270,13 @@ test(
         },
       ],
       [
+        "uppercase Collector image digest",
+        {
+          ...loggingValues,
+          "logging.collector.image": `docker.io/otel/opentelemetry-collector-contrib:0.159.0@sha256:${"C".repeat(64)}`,
+        },
+      ],
+      [
         "shared config Secret",
         { ...loggingValues, "logging.collector.configSecretName": "occ-auth" },
       ],
