@@ -178,6 +178,8 @@ hash is not exported. `authentication.provider-unavailable-warning` keeps
 instance ID stays local.
 `worker.repository-cleanup-warning` keeps `occ.code` and its bounded cause as
 `occ.worker.cause`.
+`worker.compute-prepare-failed` (a Compute Driver could not prepare a revision) is
+ERROR and keeps `occ.code`; the stage, error class, status and message stay local.
 `presets.default-refresh-skipped` (a default Preset copy kept because policy refused
 its refresh) is WARN and keeps `occ.namespace.id` and `occ.preset.id`; the Preset
 name, refusal text and Restriction IDs stay local. `presets.default-create-skipped`
