@@ -33,7 +33,9 @@ error, or a failure with no attempts left (5 by default), including a claim that
 expired on its last attempt (`LEASE_EXPIRED`) and queued work with none left
 (`MAX_ATTEMPTS_EXHAUSTED`). A failure the worker will retry has no `final` field.
 Retrying failed work, such as an Agent or Namespace deletion, is its own audited
-action, and the same `workId` can then record more events.
+action, and the same `workId` can then record more events. When Stop or Delete
+cancels an Agent's queued or running provisioning work, only the Stop or Delete
+event is recorded; the cancelled work gets no `reconcile` event.
 Authorization denials and lifecycle events such as revision activation are
 always recorded. An external sign-in callback that matches no pending attempt is
 not: anyone can send one, so the API counts it in a
