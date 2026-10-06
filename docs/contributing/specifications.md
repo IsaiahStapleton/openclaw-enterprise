@@ -91,8 +91,10 @@ number, starting at `0042` or higher; check `specs/plans/` and Git history so de
 or renamed task plans do not free numbers.
 
 Keep one row per RFC in `specs/README.md`, with its linked number and name in
-the first column, its `implementation_status` in the second, concise notes
-in the third, and its author in the fourth. Link current evidence and identify material gaps for partial work.
+the first column, its implementation-status emoji in the second, concise notes
+in the third, and its author in the fourth. Use the index legend to map the
+textual `implementation_status` to an emoji; keep frontmatter values unchanged.
+Link current evidence and identify material gaps for partial work.
 Keep the row synchronized with the RFC’s name, implementation status, and author. Link an RFC and its plan to each other; plans
 are not listed in the RFC index. If a standalone task later gains an RFC, retain
 its task ID and path and add the relationship.
