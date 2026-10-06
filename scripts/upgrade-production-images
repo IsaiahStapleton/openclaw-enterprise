@@ -63,7 +63,7 @@ require_private_file() {
 }
 
 immutable_image() {
-  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[A-Fa-f0-9]{64}$ ]]
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$ ]]
 }
 
 json_file_name() {

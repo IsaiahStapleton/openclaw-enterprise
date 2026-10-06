@@ -28,8 +28,8 @@ external integration behavior.
 
 Prepare:
 
-- each selected image as an immutable `@sha256:` digest with passing checks and
-  a reviewed source commit;
+- each selected image as an immutable lowercase `@sha256:` digest with passing
+  checks and a reviewed source commit;
 - a clean checkout of the release you are installing, at `RELEASE_SOURCE_SHA`.
   Run the helper from its root: it renders that checkout's Helm chart and
   compares the Collector configuration with that checkout's files;
