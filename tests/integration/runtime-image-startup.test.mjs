@@ -274,9 +274,9 @@ process.exit(child.status ?? 1);
       {},
       JSON.stringify(files),
     );
-    // All supervisor proofs: environment and file-delivered node setup, and a
-    // failed saved-identity probe that is retried.
-    assert.match(stdout, /\bpass 3\b/);
+    // All supervisor proofs: environment and file-delivered node setup, a
+    // failed saved-identity probe that is retried, and a stop with no child.
+    assert.match(stdout, /\bpass 4\b/);
     assert.match(stdout, /\bfail 0\b/);
     assert.match(stdout, /skipped 0/);
   },
