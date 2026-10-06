@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -259,6 +259,66 @@ async function exportedThroughSentinel(fixture, mapRecord) {
     .filter(({ record }) => !isSentinel(record))
     .map(({ resource, record }) => mapRecord(resource, record));
 }
+
+// The OCC API and worker event names the Collector exports; every other OCC event is dropped.
+async function exportedOccEventPattern() {
+  const collector = loadYaml(await readFile(join(root, "deploy/logging/collector.yaml"), "utf8"));
+  const statement = collector.processors["transform/operational"].log_statements
+    .flatMap(({ statements }) => statements)
+    .find(
+      (entry) =>
+        entry.startsWith('set(attributes["event.name"], cache["record"]["event"])') &&
+        entry.includes('"occ-api"'),
+    );
+  const [, pattern] = statement.match(/IsMatch\(cache\["record"\]\["event"\], "([^"]+)"\)/);
+  // The Collector escapes `$` as `$$` in its configuration.
+  return new RegExp(pattern.replaceAll("$$", "$"));
+}
+
+async function sourceFiles(directory, extensions) {
+  return (await readdir(join(root, directory), { recursive: true }))
+    .filter((path) => extensions.some((extension) => path.endsWith(extension)))
+    .map((path) => join(directory, path));
+}
+
+// Guides, references and flows tell operators to look for OCC events by name. A named
+// event the Collector drops never reaches the log backend those operators search, as
+// happened to `shutdown.failed` and `device_authorization.start_failed` (finding 600).
+test("the Collector exports every OCC API and worker event the docs name", async () => {
+  const pattern = await exportedOccEventPattern();
+  const emitted = new Set();
+  for (const path of [
+    ...(await sourceFiles("apps/controller/src", [".ts", ".mjs"])),
+    ...(await sourceFiles("packages/occ/src", [".ts"])),
+  ]) {
+    // The Kubernetes Compute Driver renders this file's events into Gateway and Codex
+    // Pods; the Collector classifies those runtime wrapper diagnostics separately.
+    if (path.endsWith("drivers/compute/kubernetes/runtime-entrypoints.ts")) {
+      continue;
+    }
+    const text = await readFile(join(root, path), "utf8");
+    for (const [, event] of text.matchAll(/\bevent: "([a-z_]+[.][a-z_.-]+)"/g)) {
+      emitted.add(event);
+    }
+  }
+  const named = new Map();
+  for (const path of await sourceFiles("docs", [".md"])) {
+    const text = await readFile(join(root, path), "utf8");
+    for (const [, event] of text.matchAll(/`([a-z_]+[.][a-z_.-]+)`/g)) {
+      if (emitted.has(event) && !named.has(event)) {
+        named.set(event, path);
+      }
+    }
+  }
+  // Guard the scan itself: these documented events must be found, or the check is vacuous.
+  for (const event of ["http.completed", "worker.compute-prepare-failed", "shutdown.failed"]) {
+    assert.ok(named.has(event), `${event} is emitted and documented`);
+  }
+  const dropped = [...named]
+    .filter(([event]) => !pattern.test(event))
+    .map(([event, path]) => `${event} (${path})`);
+  assert.deepEqual(dropped, [], "documented OCC events the Collector drops");
+});
 
 test(
   "native Collector filters actual Docker forwarding, binds transport identity, and survives exporter outage",
@@ -1177,6 +1237,227 @@ test(
       ]),
     );
     assert.doesNotMatch(JSON.stringify(exported), /CANARY_/);
+  },
+);
+
+test(
+  "native Collector exports OCC lifecycle, dependency and authentication warnings with bounded fields",
+  {
+    skip: selected
+      ? false
+      : "Set OCC_TEST_LOGGING_COLLECTOR=1 for pinned Collector OCC warning proof.",
+    timeout: 180_000,
+  },
+  async (t) => {
+    const fixture = await collectorFixture(t, "occ-warnings");
+    const receiverAddress = await startKubernetesProcessors(fixture);
+    const canary = `canary${fixture.suffix}`;
+    const resource = (component) => ({
+      attributes: Object.entries({
+        "occ.application": "openclaw-enterprise",
+        "occ.component": component,
+        "k8s.pod.uid": `pod-${randomUUID()}`,
+        "container.id": `containerd://${randomUUID()}`,
+      }).map(([key, value]) => ({ key, value: { stringValue: value } })),
+    });
+    // Records as the API and worker print them: Pino JSON on stdout, and the PostgreSQL
+    // pool's idle-connection warning written directly to stderr.
+    const line = (record, stream = "stdout") => ({
+      timeUnixNano: String(BigInt(Date.now()) * 1000000n),
+      body: {
+        stringValue: JSON.stringify({
+          time: Date.now(),
+          pid: 1,
+          hostname: canary,
+          ...record,
+        }),
+      },
+      attributes: [{ key: "log.iostream", value: { stringValue: stream } }],
+    });
+    const requestId = `req_${randomUUID()}`;
+    const namespaceId = `ns_${randomUUID()}`;
+    const agentId = `agt_${randomUUID()}`;
+    const revisionId = `rev_${randomUUID()}`;
+    await postLogs(receiverAddress, [
+      {
+        resource: resource("api"),
+        scopeLogs: [
+          {
+            logRecords: [
+              line({ severity: "INFO", event: "shutdown.started", signal: "SIGTERM" }),
+              line({ severity: "INFO", event: "shutdown.completed", durationMs: 1250 }),
+              line({
+                severity: "ERROR",
+                event: "shutdown.failed",
+                code: "SHUTDOWN_FAILED",
+                durationMs: 30000,
+              }),
+              line({ level: "warn", event: "database.idle-client-error", code: "57P01" }, "stderr"),
+              // The pool logs a Node transport code when the socket fails first.
+              line(
+                { level: "warn", event: "database.idle-client-error", code: "ECONNRESET" },
+                "stderr",
+              ),
+              // An unbounded code loses the field, never the event.
+              line({ level: "warn", event: "database.idle-client-error", code: canary }, "stderr"),
+              line({
+                severity: "WARN",
+                event: "device_authorization.start_failed",
+                requestId,
+                route: `/api/${canary}`,
+                host: "auth.openai.com",
+                reason: "unreachable",
+                failure: "TimeoutError",
+              }),
+              // The denied call and Kubernetes namespace stay in local logs.
+              line({
+                severity: "WARN",
+                event: "agent_runtime_credentials.cluster_denied",
+                requestId,
+                route: `/api/${canary}`,
+                verb: "get",
+                resource: "secrets",
+                kubernetesNamespace: `tenant-${canary}`,
+                plane: "execution",
+                kubernetesStatus: 403,
+              }),
+              // A failed audit write keeps the Agent's IDs; the error stays local.
+              line({
+                severity: "WARN",
+                event: "native_admin.websocket_audit_failed",
+                error: { type: "Error", message: canary, stack: `Error: ${canary}` },
+                namespaceId,
+                agentId,
+                revisionId,
+              }),
+              line({ severity: "WARN", event: "native_admin.websocket_denial_audit_failed" }),
+              // Account IDs and messages that name them stay in local logs.
+              line({
+                severity: "WARN",
+                event: "authentication.activation-warning",
+                reason: "Accounts without a Principal or exactly one password were not enrolled.",
+                skippedUserIds: [`user_${canary}`],
+                skippedUserCount: 1,
+                skippedUserIdsTruncated: false,
+              }),
+              line({
+                severity: "WARN",
+                event: "authentication.password-sign-in-warning",
+                code: "EXTERNAL_IDENTITY_MISSING",
+                skippedUserIds: [`user_${canary}`],
+                skippedUserCount: 1,
+                skippedUserIdsTruncated: false,
+              }),
+              line({
+                severity: "WARN",
+                event: "authentication.recovery-seed-warning",
+                message: `OCC_AUTH_GITHUB_RECOVERY_USER_ID differs ${canary}`,
+              }),
+              // A near-match of a reviewed name is still dropped.
+              line({ severity: "WARN", event: "shutdown.failed-unreviewed" }),
+            ],
+          },
+        ],
+      },
+      {
+        resource: resource("worker"),
+        scopeLogs: [
+          {
+            logRecords: [
+              line({ level: "warn", event: "database.idle-client-error", code: "57P01" }, "stderr"),
+            ],
+          },
+        ],
+      },
+      // The sentinel is a runtime wrapper record, which the Collector exports only from
+      // a managed Gateway Pod.
+      sentinelLogs({
+        attributes: Object.entries({
+          "occ.managed_by": "openclaw-enterprise",
+          "occ.role": "gateway",
+          "k8s.pod.uid": `pod-${randomUUID()}`,
+          "container.id": `containerd://${randomUUID()}`,
+        }).map(([key, value]) => ({ key, value: { stringValue: value } })),
+      }),
+    ]);
+    const exported = await exportedThroughSentinel(fixture, (resource, record) => ({
+      resource: attributes(resource.resource?.attributes),
+      record,
+    }));
+    const summary = (service, severity, stream, fields) =>
+      JSON.stringify([
+        service,
+        severity,
+        Object.entries({ "log.iostream": stream, ...fields }).sort(([a], [b]) =>
+          a.localeCompare(b),
+        ),
+      ]);
+    const api = (severity, fields, stream = "stdout") =>
+      summary("occ-api", severity, stream, fields);
+    const sort = (entries) => [...entries].sort();
+    assert.deepEqual(
+      sort(
+        exported.map(({ resource, record }) => {
+          const fields = Object.fromEntries(
+            record.attributes.map(({ key, value }) => [
+              key,
+              // OTLP JSON carries an int64 as a string; a JSON number may arrive as either.
+              value.stringValue ?? String(value.intValue ?? value.doubleValue),
+            ]),
+          );
+          assert.equal(record.body.stringValue, fields["event.name"]);
+          return summary(
+            resource["service.name"],
+            record.severityText,
+            fields["log.iostream"],
+            fields,
+          );
+        }),
+      ),
+      sort([
+        api("INFO", { "event.name": "shutdown.started" }),
+        api("INFO", { "event.name": "shutdown.completed", duration_ms: "1250" }),
+        api("ERROR", {
+          "event.name": "shutdown.failed",
+          "occ.code": "SHUTDOWN_FAILED",
+          duration_ms: "30000",
+        }),
+        api("WARN", { "event.name": "database.idle-client-error", "occ.code": "57P01" }, "stderr"),
+        api(
+          "WARN",
+          { "event.name": "database.idle-client-error", "occ.code": "ECONNRESET" },
+          "stderr",
+        ),
+        api("WARN", { "event.name": "database.idle-client-error" }, "stderr"),
+        api("WARN", {
+          "event.name": "device_authorization.start_failed",
+          "request.id": requestId,
+          "occ.code": "TimeoutError",
+        }),
+        api("WARN", {
+          "event.name": "agent_runtime_credentials.cluster_denied",
+          "request.id": requestId,
+        }),
+        api("WARN", {
+          "event.name": "native_admin.websocket_audit_failed",
+          "occ.namespace.id": namespaceId,
+          "occ.agent.id": agentId,
+          "occ.revision.id": revisionId,
+        }),
+        api("WARN", { "event.name": "native_admin.websocket_denial_audit_failed" }),
+        api("WARN", { "event.name": "authentication.activation-warning" }),
+        api("WARN", {
+          "event.name": "authentication.password-sign-in-warning",
+          "occ.code": "EXTERNAL_IDENTITY_MISSING",
+        }),
+        api("WARN", { "event.name": "authentication.recovery-seed-warning" }),
+        summary("occ-worker", "WARN", "stderr", {
+          "event.name": "database.idle-client-error",
+          "occ.code": "57P01",
+        }),
+      ]),
+    );
+    assert.doesNotMatch(JSON.stringify(exported), new RegExp(canary));
   },
 );
 
