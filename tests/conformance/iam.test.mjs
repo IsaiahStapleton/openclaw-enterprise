@@ -171,7 +171,7 @@ function managedNamespaceDriver(platform, currentIdentities) {
   });
 }
 
-// The managed "namespace-reader" Role: read on namespace-a itself.
+// The managed "namespace-reader" Role: Namespace read, scoped to namespace-a.
 function createNamespaceReaderRole(native, unit) {
   return native.createNamespaceRole(
     { policy: unit.iamPolicy },
@@ -203,10 +203,12 @@ test("managed memory policy binds provisioned humans and local services to only 
     await createInstallationNamespaces(unit);
     await createNamespaceReaderRole(native, unit);
   });
-  const input = namespaceReaderBinding;
   for (const subject of ["principal-unbound", "service-principal-reader-a"]) {
     await platform.transact((unit) =>
-      native.createNamespaceAccessBinding({ policy: unit.iamPolicy }, input(subject)),
+      native.createNamespaceAccessBinding(
+        { policy: unit.iamPolicy },
+        namespaceReaderBinding(subject),
+      ),
     );
     assert.equal(
       (
@@ -230,11 +232,11 @@ test("managed memory policy binds provisioned humans and local services to only 
     );
   }
   for (const invalid of [
-    input("missing"),
-    input("installation-service"),
+    namespaceReaderBinding("missing"),
+    namespaceReaderBinding("installation-service"),
     // A stale Agent identity in the provisioned set cannot replace a live owner.
-    input("service-principal-agent-a"),
-    input("principal-unbound", "namespace-b"),
+    namespaceReaderBinding("service-principal-agent-a"),
+    namespaceReaderBinding("principal-unbound", "namespace-b"),
   ]) {
     await assert.rejects(
       platform.transact((unit) =>
@@ -247,7 +249,7 @@ test("managed memory policy binds provisioned humans and local services to only 
     native.deleteNamespaceAccessBinding(
       { policy: unit.iamPolicy },
       "namespace-a",
-      input("principal-unbound").id,
+      namespaceReaderBinding("principal-unbound").id,
     ),
   );
   assert.equal(
@@ -279,10 +281,12 @@ test("managed memory policy resolves identities enrolled after construction with
     });
     await createNamespaceReaderRole(native, unit);
   });
-  const input = namespaceReaderBinding;
   const bindLate = (subject) =>
     platform.transact((unit) =>
-      native.createNamespaceAccessBinding({ policy: unit.iamPolicy }, input(subject)),
+      native.createNamespaceAccessBinding(
+        { policy: unit.iamPolicy },
+        namespaceReaderBinding(subject),
+      ),
     );
   await assert.rejects(bindLate("principal-late"), { name: "IAMPolicyValidationError" });
 
@@ -319,14 +323,14 @@ test("managed memory policy resolves identities enrolled after construction with
     );
   }
   for (const invalid of [
-    input("missing"),
-    input("service-late-b"),
-    input("service-late-installation"),
+    namespaceReaderBinding("missing"),
+    namespaceReaderBinding("service-late-b"),
+    namespaceReaderBinding("service-late-installation"),
     // An Agent ServicePrincipal resolves only through a live Agent.
-    input("service-late-agent"),
-    input("principal-late-scoped"),
-    input("principal-late", "namespace-b"),
-    input("principal-late", "namespace-missing"),
+    namespaceReaderBinding("service-late-agent"),
+    namespaceReaderBinding("principal-late-scoped"),
+    namespaceReaderBinding("principal-late", "namespace-b"),
+    namespaceReaderBinding("principal-late", "namespace-missing"),
   ]) {
     await assert.rejects(
       platform.transact((unit) =>
