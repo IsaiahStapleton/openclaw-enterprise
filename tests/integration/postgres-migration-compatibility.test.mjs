@@ -927,14 +927,22 @@ async function installProviderCompletedHistory(db) {
   }
 }
 
+// The history cases start hundreds of migration commands. Run each package.json script's
+// exact text through `sh`, as pnpm does, without pnpm's own startup (about 1 s of CPU per
+// call). The "Drizzle second migration" case and every prepared CI database still run the
+// command through `corepack pnpm`, and the Helm migration Job runs the script file directly.
+const migrationScripts = readFile(join(repositoryRoot, "package.json"), "utf8").then(
+  (text) => JSON.parse(text).scripts,
+);
+
 async function runHistoryMigration(db, mode = "development", checkOnly = false) {
-  const args = [
-    "pnpm",
-    mode === "production" ? "db:migrate:production" : "db:migrate",
-    ...(checkOnly ? ["--check"] : []),
+  const script = (await migrationScripts)[
+    mode === "production" ? "db:migrate:production" : "db:migrate"
   ];
+  assert.equal(typeof script, "string");
+  const args = ["-c", `${script} "$@"`, "sh", ...(checkOnly ? ["--check"] : [])];
   try {
-    const { stdout } = await execFileAsync("corepack", args, {
+    const { stdout } = await execFileAsync("sh", args, {
       cwd: repositoryRoot,
       env: {
         ...process.env,
