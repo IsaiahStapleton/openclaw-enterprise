@@ -11616,6 +11616,8 @@ for (const embedded of [true, false]) {
           [503, "ServiceUnavailable", true],
           [429, "TooManyRequests", true],
           [403, "Forbidden", false],
+          // A Status reason that is not one CamelCase word is dropped: it could carry request data.
+          [422, "Invalid: CANARY_REASON", false],
         ].map((answer) => [target, write, ...answer]),
       ),
     )) {
@@ -11667,7 +11669,7 @@ for (const embedded of [true, false]) {
         assert.equal(error.message, target.message);
       }
       assert.equal(error.cause.code, status);
-      assert.equal(error.cause.reason, reason);
+      assert.equal(error.cause.reason, status === 422 ? undefined : reason);
       assert.equal(error.cause.cause, undefined);
       assert.deepEqual(fixture.driver.describePrepareRevisionFailure(error), {
         code: transient ? "KUBERNETES_API_UNAVAILABLE" : "KUBERNETES_API_REJECTED",
@@ -11678,7 +11680,12 @@ for (const embedded of [true, false]) {
       });
       const evidence = inspect(error, { depth: 8 });
       assert.ok(written.length > 0);
-      for (const secret of [...written, "fixture-model-key", "private-create-documents"]) {
+      for (const secret of [
+        ...written,
+        "fixture-model-key",
+        "private-create-documents",
+        "CANARY_REASON",
+      ]) {
         assert.equal(evidence.includes(secret), false);
       }
     }
