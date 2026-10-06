@@ -829,11 +829,12 @@ function requireDedicatedNativeSupport(
   harness: Readonly<RevisionHarnessDescriptor>,
   sandbox: SandboxDriver | undefined,
   nativeWorkers: NativeWorkerSupportSource | undefined,
+  { runtimeImage = true }: { readonly runtimeImage?: boolean } = {},
 ): void {
   if (harness.id !== "openclaw" || harness.mode !== "dedicated") {
     return;
   }
-  if (nativeWorkers === undefined) {
+  if (runtimeImage && nativeWorkers === undefined) {
     throw new NativeWorkerSupportError();
   }
   const requiredFacets: readonly SandboxFacet[] = ["networking", "filesystem", "process"];
@@ -6852,11 +6853,11 @@ export class OpenClawController {
       mode: plan.executionMode,
     };
     const sandbox = this.sandboxDriver();
-    // Native worker support is admission for writes too: a status read still reports the stored
-    // work after the runtime image loses it.
-    if (!statusRead) {
-      requireDedicatedNativeSupport(harness, sandbox, this.nativeWorkers);
-    }
+    // Runtime image native worker support is admission for writes (replay, retry, the worker), like
+    // the plugin policy below: a status read still reports the stored work after the image loses it.
+    requireDedicatedNativeSupport(harness, sandbox, this.nativeWorkers, {
+      runtimeImage: !statusRead,
+    });
     const configuration =
       sandbox?.configureAgent?.(plan.configuration.values, harness) ?? plan.configuration.values;
     if (resolveConfiguredHarnessId(configuration) !== harness.id) {
