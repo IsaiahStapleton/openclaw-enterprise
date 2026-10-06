@@ -254,16 +254,17 @@ create child resources. Human enrollment and grant creation are separate steps.
 
 Roles and bindings cannot be updated. Create replacements and explicitly
 remove old bindings. A referenced Role cannot be deleted (`409`), and deleting
-one binding preserves equivalent and unrelated bindings. Deleting an Agent,
+one binding preserves equivalent and unrelated bindings. Deleting a
 Configuration, Preset, Secret, credential source, or ServiceAccount removes the
 bindings that target it in the same transaction, and its delete audit event lists
-them (`removedAccessBindings`). Agent deletion completes asynchronously and also
-removes the bindings that target its AgentRevisions or name its ServicePrincipal as
-subject; its accepted delete event lists all of them in
+them (`removedAccessBindings`). Agent deletion completes asynchronously and then
+removes the bindings that target the Agent or its AgentRevisions or name its
+ServicePrincipal as subject; its accepted delete event lists all of them in
 `accessBindingsRemovedOnCompletion`. A deleting Agent admits no new binding of
 those kinds. Completion also removes the deny Restrictions on the Agent or its
 AgentRevisions, at Installation or Namespace scope; the same event lists them in
-`restrictionsRemovedOnCompletion`.
+`restrictionsRemovedOnCompletion`. Each of these lists appears only when it is
+nonempty.
 Namespace teardown removes the Namespace's bindings and Roles with the tombstone
 and records them in the lifecycle event. After an unknown
 creation outcome, list and inspect policy before retrying; equivalent bindings
@@ -366,6 +367,8 @@ For a working authenticated request, see the
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-06 15:40: Agent-targeting bindings are removed on deletion completion; the audit lists appear only when nonempty. (dogfood-r37)
 
 - 2026-10-03 16:45: The Agent delete event lists the Restrictions its completion removes. (deletion-audit-restrictions)
 
