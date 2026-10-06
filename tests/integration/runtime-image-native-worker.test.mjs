@@ -10,6 +10,7 @@ import test from "node:test";
 import { imageSmokeTimeoutMultiplier } from "../helpers/image-smoke-timeout.mjs";
 import { GATEWAY_RUNTIME_ENTRYPOINT as KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
 import {
+  commandOutput,
   image,
   imageTestOptions,
   runDocker,
@@ -131,7 +132,22 @@ process.exit(child.status ?? 1);
       ],
       {},
       JSON.stringify(files),
-    );
+    ).catch((error) => {
+      // CI truncates the error message and drops the command output, so name the
+      // in-image proof that failed first (main run 37424312731 lost it).
+      const report = commandOutput(error);
+      const failing = report.indexOf("failing tests:");
+      const summary =
+        failing !== -1
+          ? report.slice(failing, failing + 2_000)
+          : report.trim() !== ""
+            ? report.slice(-2_000)
+            : error.message;
+      const stopped = error.killed ? ` (killed by ${error.signal ?? "a signal"})` : "";
+      throw new Error(`The in-image supervisor proof failed${stopped}: ${summary}`, {
+        cause: error,
+      });
+    });
     // All supervisor proofs: environment and file-delivered node setup, a
     // failed saved-identity probe that is retried, and a stop with no child.
     assert.match(stdout, /\bpass 4\b/);
