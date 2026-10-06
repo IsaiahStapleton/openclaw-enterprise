@@ -4789,6 +4789,24 @@ test("Agent provisioning API validates inline configuration with existing Secret
     computeRefused.body.error.message,
     "The Compute Driver cannot provision this execution mode or gateway configuration.",
   );
+  // The refusal comes after authorization: a caller who cannot create Agents learns nothing
+  // about the Installation's Compute settings.
+  fixture.state.restrictions.push({
+    id: "deny-provisioning-agent-create",
+    namespaceId: namespace.data.id,
+    resourceKind: "agent",
+    resourceId: namespace.data.id,
+    action: "create",
+    effect: "deny",
+  });
+  const refusedUnauthorized = await injectedRequest(
+    fixture.app,
+    "POST",
+    `/namespaces/${namespace.data.id}/agents/provision`,
+    { body: provisioningRequestBody(namespace.data.id, secrets) },
+  );
+  fixture.state.restrictions.pop();
+  assert.equal(refusedUnauthorized.status, 403, JSON.stringify(refusedUnauthorized.body));
   // A dependency the Compute Driver reports as unavailable stays retryable.
   computeDriver.validateAgentProvisioning = () => {
     throw new DependencyUnavailableError("The Compute Driver is unavailable.");
