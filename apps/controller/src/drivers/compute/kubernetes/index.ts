@@ -453,10 +453,12 @@ class ConfigurationFailure extends Error {}
 /**
  * A gateway setting in the caller's own Configuration that Kubernetes Compute cannot
  * provision. It names the setting's path and what is accepted, never the submitted value.
- * Deployment treats it as any other ConfigurationFailure; provisioning validation reports it
- * to the caller as a ComputeGatewaySettingError.
+ * Deployment admission and provisioning validation report it to the caller as a
+ * ComputeGatewaySettingError; preparation treats it as any other ConfigurationFailure.
  * TODO: raise it for trustedProxy.allowUsers too once open #906, which rewrites that check,
- * lands or closes; until then that refusal keeps the fixed 409 text and a logged reason.
+ * lands or closes; until then that refusal keeps the fixed 409 text and a logged reason at
+ * provisioning, and fails a deployment only in preparation. Because that check runs before
+ * the allowLoopback and identityScopes checks, a refused allowUsers also hides those.
  */
 class GatewaySettingFailure extends ConfigurationFailure {
   readonly setting: string;

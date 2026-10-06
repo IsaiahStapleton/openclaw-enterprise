@@ -5726,7 +5726,17 @@ export class OpenClawController {
       }
       // Every preparation attempt would refuse such a gateway setting and the deployment would
       // fail as an unavailable dependency, so refuse it here with the 409 provisioning answers.
-      compute.validateGatewaySettings?.(admittedConfiguration);
+      // Any other refusal stays with preparation, which checks the same document again.
+      try {
+        compute.validateGatewaySettings?.(admittedConfiguration);
+      } catch (error) {
+        if (
+          error instanceof ComputeGatewaySettingError ||
+          error instanceof DependencyUnavailableError
+        ) {
+          throw error;
+        }
+      }
       const pluginState =
         lockedAgent.plugins === undefined || Object.keys(lockedAgent.plugins).length === 0
           ? undefined
