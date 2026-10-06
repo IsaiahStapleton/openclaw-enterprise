@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join, posix, relative, resolve } from "node:path";
-import { codexSandboxProbeCommand } from "./codex-sandbox-probe.mjs";
 import {
   assertReviewedCodexVersion,
   codexBwrapAdditionalSyscalls,
@@ -12,6 +11,12 @@ import {
   stableJson,
   validateRuntimeDefaultSeccompProfile,
 } from "./codex-seccomp-profile.mjs";
+
+// Load before any preparation effects; the complete script travels through kubectl exec.
+const sandboxProbeScript = await readFile(
+  new URL("./codex-sandbox-probe.sh", import.meta.url),
+  "utf8",
+);
 
 const defaultProfileName = "openclaw/codex-bwrap.json";
 const kubeletSeccompRoot = "/var/lib/kubelet/seccomp";
@@ -332,7 +337,10 @@ async function execCodexSandboxProbe(selection, namespace, podName, options) {
         "--",
         "sh",
         "-c",
-        codexSandboxProbeCommand(options, nonce),
+        sandboxProbeScript,
+        "codex-sandbox-probe",
+        options.codexVersion,
+        nonce,
       ]),
       { timeoutMs: options.commandTimeoutMs },
     );

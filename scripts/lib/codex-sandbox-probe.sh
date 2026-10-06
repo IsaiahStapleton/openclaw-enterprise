@@ -1,21 +1,21 @@
-// A fresh marker binds evidence to this invocation, not arbitrary client error text.
-// This is correspondence from the trusted command path, not remote authentication.
-// The whole command travels through kubectl exec; no asset is needed in the probe image.
-export function codexSandboxProbeCommand({ codexVersion }, nonce) {
-  return `set -eu
+#!/bin/sh
+set -eu
+expected_version=$1
+nonce=$2
 stage=VERSION
 
+# Bind evidence to this invocation of the trusted command, not client error text.
 finish_probe() {
   result=$?
   trap - EXIT
-  printf "OCE_SANDBOX_PROBE_V1:${nonce}:END:%s:%s\\n" "$stage" "$result" >&2
+  printf 'OCE_SANDBOX_PROBE_V1:%s:END:%s:%s\n' "$nonce" "$stage" "$result" >&2
   exit "$result"
 }
 
 verify_version() {
   version=$(codex --version | awk '{print $NF}')
-  if [ "$version" != "${codexVersion}" ]; then
-    echo "Codex version mismatch: expected ${codexVersion}, got $version" >&2
+  if [ "$version" != "$expected_version" ]; then
+    echo "Codex version mismatch: expected $expected_version, got $version" >&2
     exit 64
   fi
 }
@@ -29,18 +29,18 @@ prepare_workspace() {
 }
 
 probe_workspace_boundary() {
-  timeout 60s codex sandbox \\
-    -c sandbox_mode="workspace-write" \\
-    -c sandbox_workspace_write.network_access=false \\
-    -- sh -c "
+  timeout 60s codex sandbox \
+    -c sandbox_mode="workspace-write" \
+    -c sandbox_workspace_write.network_access=false \
+    -- sh -c '
       set -eu
-      printf 'OCE_SANDBOX_PROBE_V1:${nonce}:ENTERED\\n' >&2
+      printf "OCE_SANDBOX_PROBE_V1:%s:ENTERED\n" "$1" >&2
       echo ok > /workspace/codex-seccomp-ok
       if echo escaped > /home/node/codex-seccomp-outside; then
         echo outside workspace write unexpectedly succeeded >&2
         exit 70
       fi
-    "
+    ' codex-sandbox-boundary "$nonce"
 }
 
 assert_workspace_boundary() {
@@ -53,7 +53,7 @@ cleanup_workspace() {
 }
 
 trap finish_probe EXIT
-printf "OCE_SANDBOX_PROBE_V1:${nonce}:START\\n" >&2
+printf 'OCE_SANDBOX_PROBE_V1:%s:START\n' "$nonce" >&2
 verify_version
 stage=PREPARE
 prepare_workspace
@@ -63,5 +63,4 @@ stage=ASSERTIONS
 assert_workspace_boundary
 stage=CLEANUP
 cleanup_workspace
-stage=DONE`;
-}
+stage=DONE
