@@ -29,6 +29,11 @@ const secrets = {
   "occ-github-login/client-secret": "outage-client-secret",
 };
 const memberSubject = 7_000_001;
+// The production slow lane with shorter floors: 250 ms doubling to a 500 ms cap instead of
+// 1 s doubling to 8 s. Each paced attempt waits its floor in real time, and spending one
+// email three times in a window reaches the 4 s floor otherwise. The slots and budgets stay
+// the production values.
+const slowLane = { floorMs: 250, maxFloorMs: 500 };
 
 // GitHub is optional: when it errors or stalls, GitHub sign-in fails closed and password
 // sign-in keeps working; strangers can slow the recovery administrator's password but never
@@ -66,6 +71,7 @@ test(
       databaseUrl,
       settings: githubUpgradeSettings(admin.id),
       secrets,
+      passwordSlowLaneFloors: slowLane,
     });
     const adminHeaders = await signedInHeaders(app, origin, admin);
     const attached = await attachProvider(
@@ -325,11 +331,12 @@ test(
       }
       assert.ok(refused, "the recovery email's budget is spent");
       assert.ok(Number(refused.headers["retry-after"]) >= 1, "refusals carry Retry-After");
-      // A new browser's correct recovery password is still checked, after the slowed floor.
+      // A new browser's correct recovery password is still checked, after the slowed floor
+      // (the email's second paced attempt, so the 500 ms cap).
       const started = performance.now();
       const slowed = await passwordSignIn(app, origin, admin, "192.0.2.65");
       assert.equal(slowed.statusCode, 200, slowed.body);
-      assert.ok(performance.now() - started >= 1_000, "the attempt was slowed");
+      assert.ok(performance.now() - started >= slowLane.maxFloorMs - 10, "the attempt was slowed");
       assert.equal(
         (await currentSession(app, cookieHeaderFromSetCookie(slowed.headers["set-cookie"]))).user
           .id,
