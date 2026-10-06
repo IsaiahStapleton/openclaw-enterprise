@@ -440,12 +440,16 @@ test("ChatGPT startup rejects retired integrations and unsafe backend configurat
     ],
     [
       (value) => (value.backend[0].id = " openai"),
-      /backend\[0\]\.id must be a string of 1 to 200 characters without leading or trailing whitespace/,
+      /backend\[0\]\.id must be a string of 1 to 200 characters without leading or trailing whitespace or control characters\./,
     ],
     [
       (value) => (value.backend[0].id = "a".repeat(201)),
       /backend\[0\]\.id must be a string of 1 to 200/,
     ],
+    ...["openai ", "open\u0007ai", 7].map((id) => [
+      (value) => (value.backend[0].id = id),
+      /backend\[0\]\.id must be a string of 1 to 200/,
+    ]),
     [(value) => (value.backend[0].type = "installed"), /must be chatgpt/],
     [(value) => (value.backend[0].package = "@example/backend"), /unsupported option package/],
     [
@@ -479,6 +483,15 @@ test("ChatGPT startup rejects retired integrations and unsafe backend configurat
       expected,
     );
   }
+
+  // The stated rule's upper edge: 200 characters, interior whitespace allowed.
+  const longest = chatgptInstallation();
+  longest.backend[0].id = `open ${"a".repeat(195)}`;
+  const accepted = await loadInstallationConfiguration({
+    mode: "production",
+    environment: { OCC_CONFIG_PATH: await fixture(t, longest) },
+  });
+  assert.equal(accepted.installation.backend[0].id, longest.backend[0].id);
 });
 
 test("production embedded replacements preserve their active Service across failed activation", async (t) => {
