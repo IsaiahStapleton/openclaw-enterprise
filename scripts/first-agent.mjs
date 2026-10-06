@@ -729,7 +729,9 @@ async function main(options) {
   const namespaces = await api("GET", "/namespaces");
   const namespace = namespaces.find(({ name }) => name === "default");
   if (!namespace) {
-    throw new Error("Local Setup did not create its default Namespace.");
+    throw new Error(
+      "No Namespace named default exists. Local Setup creates it, and a deleted Namespace name cannot be reused; start a new Local Setup to use this command.",
+    );
   }
   const base = `/namespaces/${namespace.id}`;
   await waitFor("the default Namespace to be ready", async () => {

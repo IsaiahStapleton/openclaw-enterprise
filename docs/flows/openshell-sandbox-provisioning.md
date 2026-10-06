@@ -115,7 +115,7 @@ provider profile, not the Sandbox policy.
 `occ dev up`. Compose is the default control plane;
 `OCC_DEVELOPMENT_CONTROL_PLANE=kubernetes` selects Kubernetes-only. Before
 creating state, Kubernetes-only startup rejects API-port collisions and records
-the engine, cluster, platform Namespace, API port, and key destination. Both
+the engine, cluster, control-plane Kubernetes namespace, API port, and key destination. Both
 profiles verify the pinned source archive, package its charts, and import
 digest-pinned Gateway, Sandbox, and supervisor images. Kubernetes-only startup
 also builds or selects the OCE controller and Agent runtime, then imports them
