@@ -31,8 +31,11 @@ without rerunning Helm. Otherwise, wait
 until the initialization Job and its Pods are terminal, then run the **candidate controller
 image** with `node scripts/migrate-production.mjs --check` against the same
 retained database, using its dedicated migrator credential and required database
-CA in an authorized environment. Keep its exit-zero `migration.checked` output in
-private evidence. Follow [migration history](../../reference/settings/operations.md#migration-history)
+CA in an authorized environment. On Kubernetes, the
+[maintenance Pod](auth-maintenance.md#run-the-command) provides all three: set
+`CONTROLLER_IMAGE` to the candidate image and replace its `args` with
+`["scripts/migrate-production.mjs","--check"]`. Keep its exit-zero
+`migration.checked` output in private evidence. Follow [migration history](../../reference/settings/operations.md#migration-history)
 to interpret unsupported or uncertain state. Only after this check and review of
 the Job outcome, repeat the command with `--resume --migration-history-checked`.
 That flag records your attestation; it does not run the database check. The
