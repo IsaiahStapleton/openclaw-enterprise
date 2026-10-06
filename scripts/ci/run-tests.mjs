@@ -701,14 +701,16 @@ async function runFile(root, lane, file, statePath, prepareFile, setup = (step) 
   let measurements = [];
   try {
     if (issues.length === 0) {
-      // The capture reads the lane state file, which concurrent files' setup rewrites.
-      agentActivity = await setup(() =>
-        startAgentNamespaceCapture({
-          statePath,
-          lane: lane.name,
-          file: relativePath,
-        }),
-      ).catch(() => undefined);
+      agentActivity = await startAgentNamespaceCapture({
+        statePath,
+        lane: lane.name,
+        file: relativePath,
+      }).catch(() => {
+        console.error(
+          `[run:${lane.name}] Agent namespace activity unavailable for ${relativePath}`,
+        );
+        return undefined;
+      });
       nodeResult = await runNode(["--test", "--test-reporter", reporterPath, absolutePath], {
         cwd: root,
         env,

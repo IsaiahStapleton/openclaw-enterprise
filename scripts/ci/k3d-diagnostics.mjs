@@ -315,8 +315,8 @@ async function stopWatch(child) {
  * Each capture streams to its own files, so files that share a cluster under
  * fileConcurrency never truncate or delete each other's watches. The watches
  * are cluster-wide: a file's record then also lists a concurrent sibling's
- * namespaces. Callers serialize `finish` with other writers of the state's
- * diagnostics file.
+ * namespaces and shares its record caps. Callers serialize `finish` with other
+ * writers of the state's diagnostics file.
  */
 export async function startAgentNamespaceCapture({ statePath, lane, file }) {
   let clusters;
@@ -352,7 +352,21 @@ export async function startAgentNamespaceCapture({ statePath, lane, file }) {
           : `/api/v1/events?watch=true&timeoutSeconds=${WATCH_SECONDS}`;
       // The raw watch streams one JSON object per line straight to the cluster's
       // private directory, which cleanup removes; only the projection is kept.
-      const output = await open(path, "w", 0o600);
+      let output;
+      try {
+        output = await open(path, "w", 0o600);
+      } catch (error) {
+        // The caller gets no finish to call: stop the watches already started, whose
+        // open handles would otherwise keep the runner alive, and drop their streams.
+        const started = [...watches, { paths, children }];
+        await Promise.all(started.flatMap((watch) => watch.children).map(stopWatch));
+        await Promise.all(
+          started
+            .flatMap((watch) => Object.values(watch.paths))
+            .map((started) => rm(started, { force: true })),
+        );
+        throw error;
+      }
       try {
         const child = spawn(kubectl, [...scope, "get", "--raw", query], {
           stdio: ["ignore", output.fd, "ignore"],
