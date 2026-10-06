@@ -1003,16 +1003,20 @@ test(
     assert.notEqual(terminal.rows[0].completed_at, null);
 
     const evidence = await pool.query(
-      `SELECT actor_id, outcome, details->>'reasonCode' AS reason
+      `SELECT actor_id, outcome, details->>'reasonCode' AS reason, details->'final' AS final
      FROM occ.audit_events
      WHERE resource_id = $1
        AND details->>'reasonCode' IN ('LEASE_EXPIRED', 'UPSTREAM_TIMEOUT')
      ORDER BY occurred_at`,
       [revisionId],
     );
+    // Only the failure that exhausts the attempt budget is final; the requeued lease loss is not.
     assert.deepEqual(
-      evidence.rows.map(({ reason }) => reason),
-      ["LEASE_EXPIRED", "UPSTREAM_TIMEOUT"],
+      evidence.rows.map(({ reason, final }) => [reason, final]),
+      [
+        ["LEASE_EXPIRED", null],
+        ["UPSTREAM_TIMEOUT", true],
+      ],
     );
     assert.ok(evidence.rows.every(({ actor_id }) => actor_id === original.actorId));
     assert.ok(evidence.rows.every(({ outcome }) => outcome === "failure"));
