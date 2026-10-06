@@ -30,6 +30,14 @@ const rpcStatus = protobuf.parse(
   { keepCase: true },
 ).root;
 
+function bindWireServer(server) {
+  return new Promise((resolve, reject) =>
+    server.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (error, value) =>
+      error ? reject(error) : resolve(value),
+    ),
+  );
+}
+
 test("OpenShell client serializes v0.1.3-pre.2 create-time service exposure", async () => {
   const proto = await loader.load(
     join(import.meta.dirname, "../fixtures/openshell-v0.1.3-pre.2-wire.proto"),
@@ -110,11 +118,7 @@ test("OpenShell client serializes v0.1.3-pre.2 create-time service exposure", as
       callback(null, { deleted: true });
     },
   });
-  const port = await new Promise((resolve, reject) =>
-    server.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (error, value) =>
-      error ? reject(error) : resolve(value),
-    ),
-  );
+  const port = await bindWireServer(server);
   const client = new GrpcOpenShellGatewayClient({ endpoint: `127.0.0.1:${port}` });
 
   try {
@@ -301,11 +305,7 @@ test("OpenShell client reads an existing Sandbox and its service endpoint", asyn
       });
     },
   });
-  const port = await new Promise((resolve, reject) =>
-    server.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (error, value) =>
-      error ? reject(error) : resolve(value),
-    ),
-  );
+  const port = await bindWireServer(server);
   const client = new GrpcOpenShellGatewayClient({ endpoint: `127.0.0.1:${port}` });
   const signal = AbortSignal.timeout(2_000);
   try {
@@ -401,11 +401,7 @@ test("OpenShell client reports a refused CreateSandbox request_id from its Error
       );
     },
   });
-  const port = await new Promise((resolve, reject) =>
-    server.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (error, value) =>
-      error ? reject(error) : resolve(value),
-    ),
-  );
+  const port = await bindWireServer(server);
   const client = new GrpcOpenShellGatewayClient({ endpoint: `127.0.0.1:${port}` });
   const create = (name) =>
     client.createSandbox(
@@ -468,11 +464,7 @@ test("OpenShell client holds only the durable admission limit as a transient dep
     CreateSandbox: (call, callback) => refuse(call.request.name, callback),
     CreateProvider: (call, callback) => refuse(call.request.provider.metadata.name, callback),
   });
-  const port = await new Promise((resolve, reject) =>
-    server.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (error, value) =>
-      error ? reject(error) : resolve(value),
-    ),
-  );
+  const port = await bindWireServer(server);
   const client = new GrpcOpenShellGatewayClient({ endpoint: `127.0.0.1:${port}` });
   const create = (name) =>
     client.createSandbox(
@@ -570,11 +562,7 @@ test("OpenShell client serializes v0.1.3-pre.2 credential providers, profiles, a
       });
     },
   });
-  const port = await new Promise((resolve, reject) =>
-    server.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (error, value) =>
-      error ? reject(error) : resolve(value),
-    ),
-  );
+  const port = await bindWireServer(server);
   const client = new GrpcOpenShellGatewayClient({ endpoint: `127.0.0.1:${port}` });
 
   try {
@@ -772,11 +760,7 @@ test("OpenShell client cancels an in-flight provider request", async () => {
       received.resolve(call.request);
     },
   });
-  const port = await new Promise((resolve, reject) =>
-    server.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (error, value) =>
-      error ? reject(error) : resolve(value),
-    ),
-  );
+  const port = await bindWireServer(server);
   const client = new GrpcOpenShellGatewayClient({ endpoint: `127.0.0.1:${port}` });
   const abort = new AbortController();
   const reason = new Error("cancelled in flight");
@@ -941,11 +925,7 @@ test("OpenShell client reads v0.1.3-pre.2 sandbox logs with nanosecond times", a
       });
     },
   });
-  const port = await new Promise((resolve, reject) =>
-    server.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (error, value) =>
-      error ? reject(error) : resolve(value),
-    ),
-  );
+  const port = await bindWireServer(server);
   const client = new GrpcOpenShellGatewayClient({ endpoint: `127.0.0.1:${port}` });
   try {
     const response = await client.getSandboxLogs(
@@ -1043,11 +1023,7 @@ test("OpenShell client serializes v0.1.3-pre.2 provider updates and detach recei
       });
     },
   });
-  const port = await new Promise((resolve, reject) =>
-    server.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (error, value) =>
-      error ? reject(error) : resolve(value),
-    ),
-  );
+  const port = await bindWireServer(server);
   const client = new GrpcOpenShellGatewayClient({
     endpoint: `http://127.0.0.1:${port}`,
     auth: { mode: "unauthenticated" },
