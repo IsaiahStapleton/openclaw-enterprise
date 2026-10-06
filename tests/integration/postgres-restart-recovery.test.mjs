@@ -397,6 +397,13 @@ test(
     const deadline = await queue.findWork(invalidKey);
     assert.equal(deadline.state, "failed_permanent");
     assert.deepEqual(deadline.resultData, { timeoutMs: 900_000, runtimeFailure });
+    // A permanent failure ends the work item on its first attempt; its evidence says so.
+    const deadlineEvidence = await pool.query(
+      `SELECT details->'final' AS final FROM occ.audit_events
+       WHERE action = 'reconcile' AND details->>'workId' = $1`,
+      [invalidKey],
+    );
+    assert.deepEqual(deadlineEvidence.rows, [{ final: true }]);
     for (const resultData of [
       { timeoutMs: 900_000, raw: "unsafe" },
       { timeoutMs: 0, runtimeFailure },
