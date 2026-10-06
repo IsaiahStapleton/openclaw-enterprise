@@ -2271,6 +2271,55 @@ test("Agent Backend API preserves nullable drafts and immutable revision associa
   assert.equal(replaced.data.backendId, "openai");
 });
 
+test("Installation Backend IDs and Agent backendId share the API schema's character rule", async () => {
+  // 200 code points (395 UTF-16 units) with interior whitespace: the API schema accepts it,
+  // so OCC must accept it as configuration and the state store must save it.
+  const id = `open\u00a0${"😀".repeat(195)}`;
+  const fixture = await createInjectedFixture({
+    backends: [
+      {
+        id,
+        type: "chatgpt",
+        configuration: {
+          workspaceId: "11111111-1111-4111-8111-111111111111",
+          apiKeyPath: "/unused-in-api-contract-test",
+        },
+        drivers: { service_account: "chatgpt-service-accounts" },
+      },
+    ],
+    backendSummaries: [{ id, type: "chatgpt" }],
+  });
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "backend-id-rule");
+  const configuration = await createConfiguration(controller, namespace.id);
+  const collection = `/namespaces/${namespace.id}/agents`;
+
+  const created = await controller.request("POST", collection, {
+    body: { name: "long-backend-id", configurationId: configuration.id, backendId: id },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(created.data.backendId, id);
+
+  // 201 code points; DEL and C1 controls (PostgreSQL's [[:cntrl:]] refuses both); line and
+  // paragraph separators.
+  for (const backendId of [
+    "😀".repeat(201),
+    "open\u007fai",
+    "open\u0085ai",
+    "open\u2028ai",
+    "open\u2029ai",
+  ]) {
+    const invalid = await controller.request("POST", collection, {
+      body: { name: "invalid-backend-id", configurationId: configuration.id, backendId },
+    });
+    assert.equal(invalid.status, 400, JSON.stringify(invalid.body));
+    assert.equal(invalid.body.error.code, "INVALID_REQUEST");
+  }
+});
+
 test("Installation API exposes Agent provisioning capabilities without configured Backends", async () => {
   let ensureNamespaceCalls;
   let deleteNamespaceCalls;

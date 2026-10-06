@@ -29,11 +29,39 @@ export const AgentProvisioningWorkId = Type.String({
   maxLength: 200,
   pattern: "^[A-Za-z0-9._~:@/-]{1,200}$",
 });
+/**
+ * The Backend ID rule, shared by the API schema, OCC's Installation configuration check and
+ * the in-memory state store. An ID is 1 to 200 code points (Ajv counts `maxLength` that way,
+ * and so does PostgreSQL `char_length`), has no leading or trailing whitespace, and has no
+ * control character (C0, DEL or C1) and no line or paragraph separator (U+2028, U+2029)
+ * anywhere. C1 and the separators are refused because the `[[:cntrl:]]` check on
+ * agents.backend_id and agent_revisions.backend_id refuses them in an en_US.utf8 (libc)
+ * database, so an ID the API accepted could not be saved.
+ */
+export const BACKEND_ID_PATTERN = /^(?!\s)(?!.*\s$)[^\u0000-\u001f\u007f-\u009f\u2028\u2029]+$/
+  .source;
+export const BACKEND_ID_MAX_CHARACTERS = 200;
 export const BackendId = Type.String({
   minLength: 1,
-  maxLength: 200,
-  pattern: /^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$/.source,
+  maxLength: BACKEND_ID_MAX_CHARACTERS,
+  pattern: BACKEND_ID_PATTERN,
 });
+
+const BACKEND_ID = new RegExp(BACKEND_ID_PATTERN, "u");
+const LONE_SURROGATE = /\p{Cs}/u;
+
+/**
+ * True when `value` meets the Backend ID rule, checked the way Ajv checks the schema. A lone
+ * surrogate is refused too: it has no UTF-8 spelling, so it could not be stored as given.
+ */
+export function isBackendId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    BACKEND_ID.test(value) &&
+    !LONE_SURROGATE.test(value) &&
+    Array.from(value).length <= BACKEND_ID_MAX_CHARACTERS
+  );
+}
 
 export const Timestamp = Type.String({
   format: "date-time",
