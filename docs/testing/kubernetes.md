@@ -45,7 +45,7 @@ OCC_TEST_KUBERNETES_KUBECONFIG=/tmp/oce-k3d/kubeconfig \
 OCC_TEST_KUBERNETES_CONTEXT=k3d-oce \
 OCC_TEST_KUBERNETES_IMAGE=oce-fixture:local \
 OCC_TEST_DATABASE_URL=postgresql://occ_app:occ-app-local@127.0.0.1:55432/openclaw_k8s_local \
-  node --test tests/integration/kubernetes-compute-real.test.mjs \
+  node --test --test-concurrency=1 tests/integration/kubernetes-compute-real.test.mjs \
     tests/integration/kubernetes-compute-provisioning-real.test.mjs \
     tests/integration/kubernetes-compute-driver-real.test.mjs
 ```
@@ -57,7 +57,9 @@ externally managed namespace preservation and provisioning handoff (in
 API-plus-worker reconciliation. The files share
 `tests/helpers/kubernetes-compute-real.mjs`. No model key is needed. Missing all
 cluster selectors skips the suite; partial selectors fail, and a missing
-database skips the API-plus-worker case.
+database skips the provisioning handoff and API-plus-worker cases. The two
+PostgreSQL-backed files share one database here, so run them one at a time
+(`--test-concurrency=1`); CI gives each file its own database.
 
 An imported immutable `OCC_TEST_KUBERNETES_RUNTIME_IMAGE` extends the
 API-plus-worker case through real runtime credential Secret and private-state
