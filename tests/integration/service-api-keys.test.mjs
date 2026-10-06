@@ -832,6 +832,21 @@ test("service API keys authenticate scoped automation without replacing sessions
       (await request("GET", path, { headers: { "x-api-key": shortLived.data.key } })).status,
       200,
     );
+    // Revoking takes no body; one is refused with the same wording as OCC's bodyless
+    // operations, and the key stays valid.
+    const withBody = await request("DELETE", `/api/auth/service-keys/${shortLived.data.id}`, {
+      body: {},
+    });
+    assert.equal(withBody.status, 400);
+    assert.equal(withBody.error.code, "INVALID_REQUEST");
+    assert.equal(
+      withBody.error.message,
+      "The request does not match the operation contract: this operation accepts no request body.",
+    );
+    assert.equal(
+      (await request("GET", path, { headers: { "x-api-key": shortLived.data.key } })).status,
+      200,
+    );
     assert.equal(
       (await request("DELETE", `/api/auth/service-keys/${shortLived.data.id}`)).status,
       200,
