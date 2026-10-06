@@ -18,8 +18,7 @@ continues through [revision admission](configuration-driver/persistence-and-revi
 - [Preset file loader](../../apps/controller/src/composition/installation-presets.ts):
   `loadInstallationPresets` reads `presets.includeDefaults` and `presets.files` before Driver composition.
   Bundled defaults are `default-codex`, **Standard Codex**, and **Standard OpenClaw**; the custom SWE Agent
-  file is loaded only when explicitly listed. Production and PostgreSQL development composition pass generic
-  name/template definitions to OCC and call `initializeDefaultPresets`.
+  file is loaded only when explicitly listed.
 
 - Source: `packages/contracts/src/api/routes.ts:occApiRoutes`.
 - [Preset routes](../../packages/contracts/src/api/routes.ts): authenticated
@@ -72,11 +71,9 @@ administrator Role. Its guarded update preserves customized Roles; the exact
 
 `apps/controller/src/composition/installation-presets.ts:loadInstallationPresets`
 
-`loadInstallationConfiguration` delegates to this loader after its startup guards
-and before validating the selected Drivers. The loader validates the opt-in boolean
-and file list. It loads bundled JSON, resolves explicit JSON paths beside the startup YAML, validates
-each name/template definition, and rejects missing, malformed, invalid, or
-duplicate-name files before composition; a file named like a bundled default
+The loader validates the opt-in boolean and file list, reads bundled JSON, and
+resolves explicit paths beside the startup YAML. It validates names/templates and rejects missing,
+malformed, invalid, or duplicate-name files; a file named like a bundled default
 replaces it, and API composition warns `presets.bundled-default-shadowed`. API and worker share the startup
 snapshot and source path (files are not watched), but only the API applies
 defaults and logs Preset warnings. [Production composition](../../apps/controller/src/composition/production.ts)
