@@ -1735,6 +1735,9 @@ test("contract error details stay within the published path cap and name what a 
     emptyBody.payload.error.message,
     "The request does not match the operation contract: this operation accepts no request body.",
   );
+  const kept = await request(fixture.app, `/namespaces/${namespace.id}`);
+  assert.equal(kept.response.status, 200);
+  assert.equal(kept.payload.data.id, namespace.id);
 });
 
 test("log polls describe only the requested source and skip Event lists", async () => {

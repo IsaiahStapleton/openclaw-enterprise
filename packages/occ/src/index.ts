@@ -5702,8 +5702,8 @@ export class OpenClawController {
         );
       } catch (error) {
         // A driver names unsupported Configuration content the caller owns; keep that
-        // message. Other refusals get this fixed text, which the caller (already authorized
-        // for deploy) sees instead of the generic "already exists" conflict.
+        // message. Other refusals get this fixed text; the caller is already authorized
+        // for deploy.
         if (error instanceof ConfigurationHarnessError) {
           throw error;
         }

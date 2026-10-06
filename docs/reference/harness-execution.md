@@ -17,11 +17,11 @@ Agent creation defaults to `embedded`; an update that omits the mode preserves
 it. Deployment rejects a Harness that the Agent's execution mode cannot run with
 `400 INVALID_REQUEST` before work is admitted. A Harness is not a separately
 created resource or Driver. Availability and isolation also depend on the
-installation's Compute and optional Sandbox. On
-Kubernetes, a dedicated gateway and its Harness run as separate Pods in the
-Agent's [tenant namespace](drivers/kubernetes-compute.md), each with its own
-ServiceAccount and storage. Embedded OpenClaw remains one untrusted
-workload that cannot move apart from its built-in Harness.
+installation's Compute and optional Sandbox. In a single Kubernetes cluster, a
+dedicated gateway and its Harness run as separate Pods in the Agent's
+[tenant namespace](drivers/kubernetes-compute.md), each with its own
+ServiceAccount and storage. Embedded OpenClaw remains one untrusted workload
+that cannot move apart from its built-in Harness.
 
 Each dedicated AgentRevision owns one Harness that all its sessions share: the
 Codex app server or the native OpenClaw node host. OpenShell contains the whole
