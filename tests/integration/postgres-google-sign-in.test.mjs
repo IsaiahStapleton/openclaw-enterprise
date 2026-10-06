@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import { passwordFailureBudget } from "../../apps/controller/src/auth/admission.ts";
 import {
   assertReservedLane,
   attachProvider,
@@ -38,11 +37,12 @@ const secrets = {
   "occ-github-login/client-id": "google-suite-github-client-id",
   "occ-github-login/client-secret": "google-suite-github-client-secret",
 };
-// The production slow lane with its floor capped at 2 s instead of 8 s, as in
-// postgres-password-sign-in-limit. This suite spends password budgets but does not measure
-// pacing, and each paced attempt waits its floor in real time: the reserved-lane check and
-// the admin sign-ins after it reach the 4 s and 8 s floors otherwise.
-const slowLane = { floorMs: passwordFailureBudget.slow.floorMs, maxFloorMs: 2000 };
+// The production slow lane with shorter floors (250 ms doubling to a 500 ms cap instead of
+// 1 s doubling to 8 s), as in postgres-password-sign-in-limit. This suite spends password
+// budgets but does not measure pacing, and each paced attempt waits its floor in real time:
+// the reserved-lane check and the admin sign-ins after it reach the 4 s and 8 s floors
+// otherwise.
+const slowLane = { floorMs: 250, maxFloorMs: 500 };
 
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const googleProviderId = `google:${digest(googleClientId)}`;
