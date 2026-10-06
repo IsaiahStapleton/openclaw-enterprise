@@ -595,25 +595,26 @@ for (const { scenario, error } of [
   { scenario: "missing-worker-cri", error: /synthetic CRI image not found/ },
   { scenario: "lagging-worker-cri" },
   { scenario: "absent-worker-cri", error: /level=fatal msg="no such image / },
-  // A hung check fails at its own timeout (1 s here), never retried as a cache miss.
+  // A hung check fails at its own timeout (3 s here, so a busy runner does not trip the
+  // host inspects that share it), never retried as a cache miss.
   {
     scenario: "hung-worker-cri",
-    error: /CRI on k3d-\S+-agent-0 did not answer within 1000 ms \(crictl inspecti \S+\)\./,
+    error: /CRI on k3d-\S+-agent-0 did not answer within 3000 ms \(crictl inspecti \S+\)\./,
   },
   {
     scenario: "hung-ctr-list",
     error:
-      /containerd on k3d-\S+-agent-0 did not answer within 1000 ms \(ctr -n k8s\.io images list\)\./,
+      /containerd on k3d-\S+-agent-0 did not answer within 3000 ms \(ctr -n k8s\.io images list\)\./,
   },
   {
     scenario: "hung-server-list",
     error:
-      /containerd on k3d-\S+-server-0 did not answer within 1000 ms \(ctr -n k8s\.io images list\)\./,
+      /containerd on k3d-\S+-server-0 did not answer within 3000 ms \(ctr -n k8s\.io images list\)\./,
   },
   {
     scenario: "hung-ctr-tag",
     error:
-      /containerd on k3d-\S+-agent-0 did not answer within 1000 ms \(ctr -n k8s\.io images tag \S+ \S+\)\./,
+      /containerd on k3d-\S+-agent-0 did not answer within 3000 ms \(ctr -n k8s\.io images tag \S+ \S+\)\./,
   },
   { scenario: "nonzero-import", error: /synthetic import command failure/ },
   { scenario: "nonzero-worker-import", error: /synthetic import command failure/ },
@@ -624,7 +625,7 @@ for (const { scenario, error } of [
       t,
       scenario,
       undefined,
-      scenario.startsWith("hung-") ? { OPENCLAW_CI_K3D_IMAGE_CHECK_TIMEOUT_MS: "1000" } : {},
+      scenario.startsWith("hung-") ? { OPENCLAW_CI_K3D_IMAGE_CHECK_TIMEOUT_MS: "3000" } : {},
     );
     const result = commands.prepare();
     assert.equal(result.error, undefined);
@@ -990,13 +991,13 @@ test("k3d preparation times out a hung host image command and never pulls for it
       OCC_TEST_KUBERNETES_GATEWAY_IMAGE: immutableImage,
       OCC_TEST_KUBERNETES_AGENT_IMAGE: immutableImage,
       OCC_TEST_KUBERNETES_CODEX_VERSION: "0.153.0",
-      OPENCLAW_CI_K3D_IMAGE_CHECK_TIMEOUT_MS: "1000",
+      OPENCLAW_CI_K3D_IMAGE_CHECK_TIMEOUT_MS: "3000",
     });
     const result = commands.prepare();
     assert.equal(result.status, 1, scenario);
     assert.match(
       result.stderr,
-      new RegExp(String.raw`The container engine did not answer within 1000 ms \(${shown}\)\.`),
+      new RegExp(String.raw`The container engine did not answer within 3000 ms \(${shown}\)\.`),
       scenario,
     );
     // A timeout is not an absent image: nothing pulls, and nothing reaches the cluster.

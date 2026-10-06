@@ -10,8 +10,9 @@ k3d node (`image-stream-import`): k3d `tools-node` can hide per-node failures wh
 exiting successfully. Imports are serialized per cluster, then preparation verifies
 digest and CRI references. Each node check and tag, and each host engine image
 inspect and tag before the import, times out after 30 seconds
-(`OPENCLAW_CI_K3D_IMAGE_CHECK_TIMEOUT_MS` overrides it). A timeout fails preparation;
-it never counts as a missing image, so nothing is pulled for it.
+(`OPENCLAW_CI_K3D_IMAGE_CHECK_TIMEOUT_MS` overrides it; it also bounds source image
+inspects in lanes without k3d). A timeout fails preparation; it never counts as a
+missing image, so nothing is pulled for it.
 
 ## Select immutable images for local preparation
 

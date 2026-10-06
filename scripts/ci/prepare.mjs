@@ -1489,6 +1489,8 @@ function localImportTag(cluster, envName) {
 // one short command; a hung one (an unresponsive node or engine) fails the step with a
 // clear message instead of stalling it until the job timeout. A timeout is never read as
 // an absent image: its error carries no engine output, so nothing pulls or retries it.
+// Despite its name, the variable also bounds the source image inspects of lanes without
+// k3d, such as Images and Packaging and Logging Collector.
 const imageCommandTimeoutMs =
   Number(process.env.OPENCLAW_CI_K3D_IMAGE_CHECK_TIMEOUT_MS) > 0
     ? Number(process.env.OPENCLAW_CI_K3D_IMAGE_CHECK_TIMEOUT_MS)
