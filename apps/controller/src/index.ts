@@ -1047,7 +1047,17 @@ export function createFastifyApp(options: ControllerAppOptions): FastifyInstance
       canonicalFailure(reply, mapped);
     },
     ajv: {
-      customOptions: { removeAdditional: false, coerceTypes: false, useDefaults: false },
+      // `verbose` attaches each failure's schema and value, so contract errors can tell which
+      // shape of a discriminated union a request chose (http/errors.ts). Neither is logged or
+      // returned: problems name only paths and the schema's accepted values, and http/errors.ts
+      // drops both from the error once its problems are built. An onError hook runs before
+      // that, so none may log `error.validation`.
+      customOptions: {
+        removeAdditional: false,
+        coerceTypes: false,
+        useDefaults: false,
+        verbose: true,
+      },
       plugins: [formatsPlugin],
     },
     schemaController: { compilersFactory: { buildSerializer: cachedResponseSerializers() } },
