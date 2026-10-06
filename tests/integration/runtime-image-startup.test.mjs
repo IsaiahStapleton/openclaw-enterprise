@@ -995,6 +995,9 @@ const timeout = setTimeout(() => { native.kill("SIGKILL"); process.exitCode = 1;
     ]);
     fs.accessSync("/opt/oce/repository-credentials/dist/drivers/repo/github/credentials/client/router.js");
     process.stdout.write("native-repository-shell-ready\\n");
+    // The proof is complete. The Codex binary takes about 5 s to exit after SIGTERM
+    // or EOF; this container's exit stops it at once.
+    process.exit();
   } finally {
     clearTimeout(timeout);
     lines.close();
@@ -2080,6 +2083,9 @@ const timeout = setTimeout(() => {
     markStockBrokerStage("direct-private-host");
     await expectFailure("direct-unrelated-private-host", directProbe, "EPERM|EACCES|ENETUNREACH|EHOSTUNREACH");
     process.stdout.write("stock-codex-repository-broker-ready " + JSON.stringify({ commit }) + "\\n");
+    // The proof is complete. The Codex binary takes about 5 s to exit after SIGTERM
+    // or EOF; this container's exit stops it at once.
+    process.exit();
   } finally {
     clearTimeout(timeout);
     lines.close();
