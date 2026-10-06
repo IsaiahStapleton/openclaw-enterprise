@@ -426,7 +426,25 @@ test(
     );
     await send(
       "worker",
-      [warningLine("compute.preflight-warning")],
+      [
+        warningLine("compute.preflight-warning"),
+        JSON.stringify({
+          event: "worker.compute-prepare-failed",
+          severity: "ERROR",
+          workId: `agent_revision:${revisionId}:reconcile`,
+          operation: "agent_revision.reconcile",
+          namespaceId,
+          agentId,
+          revisionId,
+          computeDriverId: "kubernetes",
+          code: "KUBERNETES_API_REJECTED",
+          step: "gateway",
+          errorClass: "HttpError",
+          status: 403,
+          message: canaries.join(" "),
+          ...payload,
+        }),
+      ],
       [],
       ["com.docker.compose.service=worker"],
     );
@@ -435,9 +453,9 @@ test(
       "{invalid json",
       JSON.stringify({ level: "info", subsystem: "gateway", message: "x".repeat(33_000) }),
     ]);
-    await waitFor(async () => (await records()).length >= 12);
+    await waitFor(async () => (await records()).length >= 13);
     const initial = await records();
-    assert.equal(initial.length, 12, "only reviewed JSON classes and Codex stderr pass");
+    assert.equal(initial.length, 13, "only reviewed JSON classes and Codex stderr pass");
     const warningEvents = [
       "compute.preflight-warning",
       "authentication.sign-in-limited",
@@ -450,8 +468,12 @@ test(
       assert.ok(record.timeUnixNano, "OTLP record has an Engine timestamp");
       assert.equal(
         record.severityNumber,
-        warningEvents.includes(record.body.stringValue) ? 13 : 9,
-        "severity maps to OTel WARN or INFO, not Pino's numeric level",
+        record.body.stringValue === "worker.compute-prepare-failed"
+          ? 17
+          : warningEvents.includes(record.body.stringValue)
+            ? 13
+            : 9,
+        "severity maps to OTel ERROR, WARN or INFO, not Pino's numeric level",
       );
       assert.equal(resource["openclaw.agent.id"], agentId);
       assert.equal(resource["openclaw.namespace.id"], namespaceId);
@@ -470,6 +492,7 @@ test(
       "occ-api",
       "occ-api",
       "occ-worker",
+      "occ-worker",
       "openclaw-gateway",
     ]);
     const http = initial.find(({ record }) => record.body.stringValue === "http.completed");
@@ -481,13 +504,33 @@ test(
     );
     assert.equal(httpAttributes["http.request.method"], "GET");
     assert.equal(httpAttributes["http.response.status_code"], 200);
-    const warning = initial.find(({ resource }) => resource["service.name"] === "occ-worker");
-    assert.equal(warning.record.body.stringValue, "compute.preflight-warning");
+    const warning = initial.find(
+      ({ record }) => record.body.stringValue === "compute.preflight-warning",
+    );
+    assert.equal(warning.resource["service.name"], "occ-worker");
     assert.equal(warning.record.severityText, "WARN");
     assert.deepEqual(attributes(warning.record.attributes), {
       "event.name": "compute.preflight-warning",
       "log.iostream": "stdout",
       "occ.code": "KUBERNETES_VERSION_BELOW_MINIMUM",
+    });
+    // A failed Compute prepare is exported at ERROR with its bounded code and the IDs and
+    // work identity other worker events keep; the stage, error class, status and message
+    // stay in local logs.
+    const prepareFailed = initial.find(
+      ({ record }) => record.body.stringValue === "worker.compute-prepare-failed",
+    );
+    assert.equal(prepareFailed.resource["service.name"], "occ-worker");
+    assert.equal(prepareFailed.record.severityText, "ERROR");
+    assert.deepEqual(attributes(prepareFailed.record.attributes), {
+      "event.name": "worker.compute-prepare-failed",
+      "log.iostream": "stdout",
+      "occ.agent.id": agentId,
+      "occ.code": "KUBERNETES_API_REJECTED",
+      "occ.namespace.id": namespaceId,
+      "occ.revision.id": revisionId,
+      "work.id": `agent_revision:${revisionId}:reconcile`,
+      "work.operation": "agent_revision.reconcile",
     });
     // A limited sign-in lane is promoted with its lane; the hashed key stays in local logs.
     const limited = initial.find(
@@ -588,7 +631,7 @@ test(
     }
     assert.equal(serialized.includes(`limitkey${fixture.suffix}`), false);
     assert.equal(serialized.includes(`providerkey${fixture.suffix}`), false);
-    for (const value of [...canaries, "forged-service", "forged-agent"]) {
+    for (const value of [...canaries, "forged-service", "forged-agent", "HttpError"]) {
       assert.equal(serialized.includes(value), false);
     }
     const metrics = await fetch(`http://${metricsAddress}/metrics`).then((r) => r.text());
