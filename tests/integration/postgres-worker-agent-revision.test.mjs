@@ -5108,7 +5108,7 @@ test(
     let deletes = 0;
     const output = [];
     const events = [];
-    const emitter = createWorkerLogEmitter(
+    const logger = createWorkerLogEmitter(
       createOccLogger({
         component: "occ-worker",
         destination: {
@@ -5123,14 +5123,13 @@ test(
         },
       }),
     );
+    const log = (event) => {
+      events.push(event);
+      logger(event);
+    };
     await fixture.start(
       {
         ...fixture.compute,
-        async ensureNamespace(target) {
-          const result = results[Math.min(attempts, results.length - 1)];
-          attempts += 1;
-          return { namespaceId: target.id, namespaceReady: false, ...result };
-        },
         async deleteNamespace(target) {
           deletes += 1;
           return deletes === 1
@@ -5142,11 +5141,13 @@ test(
               }
             : { namespaceId: target.id, namespaceDeleted: true };
         },
+        async ensureNamespace(target) {
+          const result = results[Math.min(attempts, results.length - 1)];
+          attempts += 1;
+          return { namespaceId: target.id, namespaceReady: false, ...result };
+        },
       },
-      (event) => {
-        events.push(event);
-        emitter(event);
-      },
+      log,
     );
     const namespace = await fixture.controller.createNamespace(fixture.actor.id, {
       name: `refused-${randomUUID()}`,
