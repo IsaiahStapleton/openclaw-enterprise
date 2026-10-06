@@ -30,16 +30,21 @@ export const AgentProvisioningWorkId = Type.String({
   pattern: "^[A-Za-z0-9._~:@/-]{1,200}$",
 });
 /**
+ * The text rule shared by Names and Backend IDs: no leading or trailing whitespace, and no
+ * control character (C0, DEL or C1) and no line or paragraph separator (U+2028, U+2029)
+ * anywhere. C1 is refused because the PostgreSQL `[[:cntrl:]]` checks on names and backend
+ * IDs refuse it: PostgreSQL's `[[:cntrl:]]` is exactly C0, DEL and C1 under every locale
+ * provider, so a value the API accepted could not be saved. The separators never matched the
+ * old `.+` Name pattern either; PostgreSQL accepts them.
+ */
+const PLAIN_TEXT_PATTERN = /^(?!\s)(?!.*\s$)[^\u0000-\u001f\u007f-\u009f\u2028\u2029]+$/.source;
+
+/**
  * The Backend ID rule, shared by the API schema, OCC's Installation configuration check and
  * the in-memory state store. An ID is 1 to 200 code points (Ajv counts `maxLength` that way,
- * and so does PostgreSQL `char_length`), has no leading or trailing whitespace, and has no
- * control character (C0, DEL or C1) and no line or paragraph separator (U+2028, U+2029)
- * anywhere. C1 and the separators are refused because the `[[:cntrl:]]` check on
- * agents.backend_id and agent_revisions.backend_id refuses them in an en_US.utf8 (libc)
- * database, so an ID the API accepted could not be saved.
+ * and so does PostgreSQL `char_length`) and follows the plain text rule above.
  */
-export const BACKEND_ID_PATTERN = /^(?!\s)(?!.*\s$)[^\u0000-\u001f\u007f-\u009f\u2028\u2029]+$/
-  .source;
+export const BACKEND_ID_PATTERN = PLAIN_TEXT_PATTERN;
 export const BACKEND_ID_MAX_CHARACTERS = 200;
 export const BackendId = Type.String({
   minLength: 1,
@@ -68,10 +73,11 @@ export const Timestamp = Type.String({
   pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$",
 });
 
+/** A resource Name: 1 to 200 code points that follow the plain text rule. */
 export const Name = Type.String({
   minLength: 1,
   maxLength: 200,
-  pattern: /^(?!\s)(?!.*\s$)(?!.*[\u0000-\u001f\u007f]).+$/.source,
+  pattern: PLAIN_TEXT_PATTERN,
 });
 
 export const PluginApproversSchema = Type.Array(

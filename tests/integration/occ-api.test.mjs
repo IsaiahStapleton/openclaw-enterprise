@@ -2320,6 +2320,41 @@ test("Installation Backend IDs and Agent backendId share the API schema's charac
   }
 });
 
+test("Names follow the Backend ID text rule, so C1 controls are refused", async () => {
+  const fixture = await createInjectedFixture();
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  // 200 code points (400 UTF-16 units) with an interior NBSP is a valid Name.
+  const namespace = await createNamespace(controller, `name\u00a0${"😀".repeat(195)}`);
+  const configuration = await createConfiguration(controller, namespace.id);
+
+  // C0, DEL and C1 controls (PostgreSQL's [[:cntrl:]] name checks refuse all three),
+  // line and paragraph separators, edge whitespace, and 201 code points.
+  for (const name of [
+    "name\u0000x",
+    "name\u007fx",
+    "name\u0080x",
+    "name\u0085x",
+    "name\u009fx",
+    "name\u2028x",
+    "name\u2029x",
+    " name",
+    "name\u00a0",
+    "😀".repeat(201),
+  ]) {
+    const refusedNamespace = await controller.request("POST", "/namespaces", { body: { name } });
+    assert.equal(refusedNamespace.status, 400, JSON.stringify(refusedNamespace.body));
+    assert.equal(refusedNamespace.body.error.code, "INVALID_REQUEST");
+    const refusedAgent = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
+      body: { name, configurationId: configuration.id },
+    });
+    assert.equal(refusedAgent.status, 400, JSON.stringify(refusedAgent.body));
+    assert.equal(refusedAgent.body.error.code, "INVALID_REQUEST");
+  }
+});
+
 test("Installation API exposes Agent provisioning capabilities without configured Backends", async () => {
   let ensureNamespaceCalls;
   let deleteNamespaceCalls;
