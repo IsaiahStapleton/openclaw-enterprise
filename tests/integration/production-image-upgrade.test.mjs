@@ -430,16 +430,19 @@ test("production image upgrades refuse uppercase digest hex before touching the 
     join(directory, "evidence"),
   ];
   // Kubernetes rejects uppercase digest hex as InvalidImageName, so each image
-  // flag must refuse it instead of failing later in a rollout.
-  for (const [flag, repositoryName] of [
-    ["--controller-image", "controller"],
-    ["--broker-image", "repository-credentials"],
-    ["--runtime-image", "runtime"],
+  // flag must refuse it instead of failing later in a rollout. A digest is
+  // exactly 64 hex characters.
+  for (const [flag, repositoryName, digest] of [
+    ["--controller-image", "controller", "A".repeat(64)],
+    ["--broker-image", "repository-credentials", "A".repeat(64)],
+    ["--runtime-image", "runtime", "A".repeat(64)],
+    ["--controller-image", "controller", "a".repeat(63)],
+    ["--controller-image", "controller", "a".repeat(65)],
   ]) {
     await assert.rejects(
       execute(
         upgradeScript,
-        [...required, flag, `registry.example.invalid/${repositoryName}@sha256:${"A".repeat(64)}`],
+        [...required, flag, `registry.example.invalid/${repositoryName}@sha256:${digest}`],
         { cwd: repository },
       ),
       (error) => {

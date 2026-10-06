@@ -82,7 +82,7 @@ const equals = (actual, expected) => JSON.stringify(actual) === JSON.stringify(e
 const configId = "sha256:" + "b".repeat(64);
 const manifestDigest = "sha256:" + "c".repeat(64);
 appendFileSync(join(root, "commands.jsonl"), JSON.stringify({
-  command, args, envPublished: existsSync(join(root, "github.env")),
+  command, args, envPublished: existsSync(join(root, "github.env")), at: Date.now(),
 }) + "\n");
 // Preparation runs independent commands concurrently. Merge this command's
 // changes into the latest shared state under a lock so none is lost.
@@ -632,10 +632,24 @@ for (const { scenario, error } of [
         /CRI on k3d-\S+-agent-0 does not list the imported \S+ reference yet \(attempt 1\); retrying\./,
       );
     }
+    if (scenario === "lagging-worker-cri") {
+      assert.deepEqual(
+        [...result.stderr.matchAll(/\(attempt (\d+)\); retrying\./g)].map(([, attempt]) => attempt),
+        ["1", "2"],
+      );
+    }
     if (scenario === "absent-worker-cri") {
       // The bounded wait is about 5 s; the lookups back off to one per second.
       const lookups = criLookups("agent-0");
       assert.ok(lookups >= 2 && lookups <= 12, `bounded CRI wait made ${lookups} lookups`);
+      // The last lookup starts once the wait has run out, so the lookups span most of it.
+      const times = preparation
+        .filter(({ args }) => args[1] === `k3d-${cluster.name}-agent-0` && args[2] === "crictl")
+        .map(({ at }) => at);
+      assert.ok(
+        times.at(-1) - times[0] >= 2_500,
+        `CRI lookups spanned ${times.at(-1) - times[0]} ms`,
+      );
     }
     const save = preparation.find(
       ({ command, args }) =>
