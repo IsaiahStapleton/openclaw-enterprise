@@ -787,10 +787,10 @@ function fittedList(prefix: string, items: readonly string[], suffix: string): s
 
 /**
  * The provisioning status message for a worker failure. Only the shared duplicate-name and
- * Compute refusal texts and the plugin-policy and native-support refusals pass through; other
- * error messages stay internal. Those refusals name only Installation configuration, the
- * work's own plugin selection and gateway settings in its own Configuration, and HTTP returns
- * them verbatim. The status contract caps
+ * Compute refusal texts and the plugin-policy, native-support and Configuration Harness
+ * refusals pass through; other error messages stay internal. Those refusals name only
+ * Installation configuration, the work's own plugin selection and settings in its own
+ * Configuration, and HTTP returns them verbatim. The status contract caps
  * `error.message` at 256 characters.
  */
 function provisioningFailureMessage(code: string, error: unknown): string {
@@ -802,9 +802,16 @@ function provisioningFailureMessage(code: string, error: unknown): string {
     ) {
       return error.message;
     }
-    if (error instanceof PluginPolicyValidationError || error instanceof NativeWorkerSupportError) {
-      const characters = Array.from(error.message);
-      return characters.length <= 256 ? error.message : `${characters.slice(0, 255).join("")}…`;
+    if (
+      error instanceof PluginPolicyValidationError ||
+      error instanceof NativeWorkerSupportError ||
+      error instanceof ConfigurationHarnessError
+    ) {
+      // A Configuration refusal can name a submitted key; status stores the message as is.
+      const characters = Array.from(error.message.replace(/[\p{Cc}\p{Cf}]|\p{Cs}/gu, "?"));
+      return characters.length <= 256
+        ? characters.join("")
+        : `${characters.slice(0, 255).join("")}…`;
     }
   }
   return "Agent provisioning could not complete.";
@@ -2139,7 +2146,8 @@ export class OpenClawController {
           "Provisioning cannot retry after cancellation or deployment handoff.",
         );
       }
-      // Full admission, including the native support and plugin policy checks the status read skips.
+      // Full admission, including the native support, plugin policy, Compute plan and Harness
+      // authentication checks the status read skips.
       await this.authorizeProvisioningRecord(state, principalId, record);
       if (record.status === "queued" || record.status === "running") {
         return Object.freeze({ provisioning: provisioningProgress(record, observed) });
@@ -6932,12 +6940,27 @@ export class OpenClawController {
         "The Compute Driver cannot validate Harness authentication.",
       );
     }
-    try {
-      compute.validateHarnessAuth(harness, auth, configuration, plan.configuration.secretBindings);
-    } catch {
-      throw new ResourceStateConflictError(
-        "The configured model, authentication, or channel bindings cannot be provisioned.",
-      );
+    // Harness authentication is admission for writes (replay, retry, the worker), like the
+    // Compute plan check: a status read reports the stored work, including a failure that
+    // names the refused setting, after a Driver change makes the check refuse the plan.
+    if (!statusRead) {
+      try {
+        compute.validateHarnessAuth(
+          harness,
+          auth,
+          configuration,
+          plan.configuration.secretBindings,
+        );
+      } catch (error) {
+        // As in deployment, a Driver that names unsupported Configuration content the caller
+        // owns keeps that message (a 400; the caller was authorized above).
+        if (error instanceof ConfigurationHarnessError) {
+          throw error;
+        }
+        throw new ResourceStateConflictError(
+          "The configured model, authentication, or channel bindings cannot be provisioned.",
+        );
+      }
     }
     // Plugin policy is admission for writes (replay, retry, the worker). A status read reports
     // the stored work, so an Installation Plugin Driver switch does not turn it into a 400.
@@ -6979,8 +7002,8 @@ export class OpenClawController {
     if (found.record.actorId !== principalId) {
       throw new AuthorizationDeniedError("Only the initiating actor can read provisioning status.");
     }
-    // Retry repeats the full check, native support, plugin policy and the Compute plan check
-    // included, after its lifecycle checks.
+    // Retry repeats the full check, native support, plugin policy, the Compute plan and Harness
+    // authentication checks included, after its lifecycle checks.
     await this.authorizeProvisioningRecord(state, principalId, found.record, { statusRead: true });
     return found;
   }

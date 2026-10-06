@@ -4,7 +4,11 @@ import test from "node:test";
 import pg from "pg";
 
 import { NativeIAMDriver } from "../../packages/iam/src/index.ts";
-import { NativeWorkerSupportError, PostgresPlatformState } from "../../packages/occ/src/index.ts";
+import {
+  ConfigurationHarnessError,
+  NativeWorkerSupportError,
+  PostgresPlatformState,
+} from "../../packages/occ/src/index.ts";
 import { composePostgresDevelopment } from "../../apps/controller/src/composition/development-postgres.ts";
 import { createControllerWorker } from "../../apps/controller/src/worker.ts";
 import {
@@ -1822,6 +1826,95 @@ test(
     assert.deepEqual(
       { code: proxyRetried.body.error.code, message: proxyRetried.body.error.message },
       { code: "RESOURCE_CONFLICT", message: settingMessage },
+    );
+  },
+);
+
+test(
+  "a Harness authentication refusal of the caller's Configuration is named on create, in the failed work and on retry",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const computeDriver = createRuntimeComputeDriver();
+    // Kubernetes Compute raises this for a Codex Gateway setting it cannot rewrite; the
+    // setting path can carry a submitted provider key, here with a control character.
+    const refusal =
+      "Configuration setting models.providers.op\u0007enai.models must be a list of objects: a dedicated Codex Gateway cannot apply it otherwise.";
+    const named = refusal.replace("\u0007", "?");
+    let refusing = true;
+    computeDriver.validateHarnessAuth = () => {
+      if (refusing) {
+        throw new ConfigurationHarnessError(refusal);
+      }
+    };
+    const fixture = await createFixture(context, {
+      computeDriver,
+      configurationDriver: createProvisioningConfigurationDriver({
+        id: "configuration-provisioning-harness-refusal",
+      }),
+      secretDriver: createTestSecretDriver({ id: "secret-provisioning" }),
+    });
+    const namespace = await fixture.bootstrapNamespace();
+    const secrets = await createProvisioningSecrets(fixture, namespace.id);
+
+    // A fresh request is refused as deployment refuses it: a 400 naming the setting.
+    const refused = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
+      body: provisioningBody(namespace.id, secrets),
+    });
+    assert.equal(refused.status, 400, JSON.stringify(refused.body));
+    assert.deepEqual(
+      { code: refused.body.error.code, message: refused.body.error.message },
+      { code: "INVALID_REQUEST", message: named },
+    );
+
+    // The Driver refuses the stored plan only after admission: the worker fails the work on
+    // its first attempt, and the failed work's message names the setting.
+    refusing = false;
+    const body = provisioningBody(namespace.id, secrets);
+    const admitted = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
+      body,
+    });
+    assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
+    refusing = true;
+    await fixture.startWorker();
+    const failed = await waitFor("the worker to refuse the provisioning work", async () => {
+      const row = await provisioningRow(fixture.pool, namespace.id, body.requestId);
+      return row.progress.error === undefined ? undefined : row;
+    });
+    await fixture.stopWorker();
+    assert.equal(failed.status, "failed");
+    assert.deepEqual(failed.progress.error, { code: "PROVISIONING_REJECTED", message: named });
+    const work = await fixture.pool.query(
+      "SELECT state, reason_code, attempt_count FROM occ.controller_work WHERE idempotency_key = $1",
+      [admitted.data.provisioning.workId],
+    );
+    assert.deepEqual(work.rows, [
+      { state: "failed_permanent", reason_code: "PROVISIONING_REJECTED", attempt_count: 1 },
+    ]);
+
+    // Status reports the stored failure without rechecking Harness authentication.
+    const status = await fixture.request("GET", admitted.data.provisioning.url);
+    assert.equal(status.status, 200, JSON.stringify(status.body));
+    assert.equal(status.data.status, "failed");
+    assert.deepEqual(status.data.error, failed.progress.error);
+    // Retry runs the plan again and names the setting too.
+    const retried = await fixture.request("POST", `${admitted.data.provisioning.url}/retry`);
+    assert.equal(retried.status, 400, JSON.stringify(retried.body));
+    assert.deepEqual(
+      { code: retried.body.error.code, message: retried.body.error.message },
+      { code: "INVALID_REQUEST", message: named },
+    );
+    // Any other Harness authentication refusal keeps the fixed 409.
+    computeDriver.validateHarnessAuth = () => {
+      throw new Error("Harness authentication is incompatible with the selected topology.");
+    };
+    const conflicted = await fixture.request("POST", `${admitted.data.provisioning.url}/retry`);
+    assert.equal(conflicted.status, 409, JSON.stringify(conflicted.body));
+    assert.deepEqual(
+      { code: conflicted.body.error.code, message: conflicted.body.error.message },
+      {
+        code: "RESOURCE_CONFLICT",
+        message: "The configured model, authentication, or channel bindings cannot be provisioned.",
+      },
     );
   },
 );
