@@ -17,25 +17,26 @@ unavailable.
 
 ### Slack editor
 
-| Control                                      | Purpose                                                                                                                                                                                                         |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Enable Slack**                             | Enables Slack in the draft when saved.                                                                                                                                                                          |
-| **Slack bot token** / **Slack app token**    | Search readable Secrets by name or ID, then select with arrow keys and Enter, or choose **Create new Secret...**. The bot token Secret also enables name search below.                                          |
-| **Create new Secret...**                     | Opens a modal with an editable Name (the Agent name and token by default), the fixed binding key, and a masked Value.                                                                                           |
-| **View ... Secret metadata**                 | Opens the selected Secret's metadata in a new tab, keeping unsaved drawer inputs.                                                                                                                               |
-| **Channels**                                 | Search channels by name with the bot token Secret, or paste exact channel IDs. Existing properties of retained channels are preserved.                                                                          |
-| **Who can use the agent in these channels?** | **Specific people** limits mentions to **Allowed people in these channels**; **Everyone in these channels** allows any Slack user there. Direct-message access is separate.                                     |
-| **Allowed people in these channels**         | Slack users, by name search or exact user ID, who may mention the Agent in the selected channels.                                                                                                               |
-| **Require a mention**                        | Applies the mention requirement to the listed channels.                                                                                                                                                         |
-| **Direct-message policy**                    | **Pairing** (approve new senders), **Allowlist** (selected users only, the default for a new setup), **Open** (anyone) or **Disabled**. An existing setup without a policy shows **Runtime default (pairing)**. |
-| **Allowed people in direct messages**        | Users allowed to send direct messages under Allowlist, or preapproved under Pairing. Allowlist needs at least one.                                                                                              |
-| **Save configuration**                       | Saves channel settings and selected Secret bindings to the shared draft.                                                                                                                                        |
-| **Cancel** / **Close**                       | Discards the drawer's unsaved inputs.                                                                                                                                                                           |
+| Control                                                                 | Purpose                                                                                                                                                                                                         |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Enable Slack**                                                        | Enables Slack in the draft when saved.                                                                                                                                                                          |
+| **Slack bot token** / **Slack app token**                               | Search readable Secrets by name or ID, then select with arrow keys and Enter, or choose **Create new Secret...**. The bot token Secret also enables name search below.                                          |
+| **Create new Secret...**                                                | Opens a modal with an editable Name (the Agent name and token by default), the fixed binding key, and a masked Value.                                                                                           |
+| **View bot token Secret metadata** / **View app token Secret metadata** | Opens the selected Secret's metadata in a new tab, keeping unsaved drawer inputs.                                                                                                                               |
+| **Channels**                                                            | Search channels by name with the bot token Secret, or paste exact channel IDs. Existing properties of retained channels are preserved.                                                                          |
+| **Who can use the agent in these channels?**                            | **Specific people** limits mentions to **Allowed people in these channels**; **Everyone in these channels** allows any Slack user there. Direct-message access is separate.                                     |
+| **Allowed people in these channels**                                    | Slack users, by name search or exact user ID, who may mention the Agent in the selected channels.                                                                                                               |
+| **Require a mention**                                                   | Applies the mention requirement to the listed channels.                                                                                                                                                         |
+| **Direct-message policy**                                               | **Pairing** (approve new senders), **Allowlist** (selected users only, the default for a new setup), **Open** (anyone) or **Disabled**. An existing setup without a policy shows **Runtime default (pairing)**. |
+| **Allowed people in direct messages**                                   | Users allowed to send direct messages under Allowlist, or preapproved under Pairing. Allowlist needs at least one.                                                                                              |
+| **Save configuration**                                                  | Saves channel settings and selected Secret bindings to the shared draft.                                                                                                                                        |
+| **Cancel** / **Close**                                                  | Discards the drawer's unsaved inputs.                                                                                                                                                                           |
 
 Name search needs a reachable Slack directory; when it is unavailable, the drawer says so and
 exact IDs still work. Channel access and direct-message access are independent:
-channel people edit the selected channels' `users`, while **Open** writes `allowFrom: ["*"]` and
-Pairing or Allowlist write the listed people to `allowFrom`. Save channel edits before changing
+channel people edit the selected channels' `users`. Switching to **Open** writes
+`allowFrom: ["*"]`, Pairing or Allowlist write the listed people to `allowFrom`, and Disabled
+keeps the saved list. Save channel edits before changing
 credentials on the Credentials tab.
 See [Slack setup](../integrations/slack.md) for credentials and policy details.
 

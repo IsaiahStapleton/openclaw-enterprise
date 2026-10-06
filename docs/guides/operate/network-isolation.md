@@ -214,7 +214,7 @@ commands. The first command prints a JSON status report, or an HTTP error from
 the status server while the Pod starts. The second fails with
 `error trying to reach service` and `502 Bad Gateway`. Some CNIs, such as k3s's
 kube-router, always admit traffic from a node to its own Pods: when the API server
-runs on the Pod's node, the second command returns the gateway's response, so this
+runs on the Pod's node, the second command can return the gateway's response, so this
 check cannot show the status-port policy there. The control Pod showed
 that other Pods cannot connect to the status port directly. Repeat for Agents
 on different nodes: the proxy source address can differ per node. Host-network
