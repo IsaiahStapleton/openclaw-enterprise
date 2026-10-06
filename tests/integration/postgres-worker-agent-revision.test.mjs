@@ -3972,8 +3972,16 @@ test(
     const completedStop = await fixture.work(firstStop, "succeeded");
     assert.equal(completedStop.attempt_count, 2);
     // Stop work must retain its own bounded kind and committed retry/success
-    // outcomes after integrating stop support with metrics instrumentation.
-    const exposition = await metrics.exposition();
+    // outcomes after integrating stop support with metrics instrumentation. Both
+    // are recorded after the stop commits, the attempt outcome last.
+    const exposition = await waitFor("the stop's successful attempt metric", async () => {
+      const text = await metrics.exposition();
+      return /occ_reconciliation_attempts_total\{[^\n]*work_kind="agent_stop"[^\n]*outcome="success"/.test(
+        text,
+      )
+        ? text
+        : undefined;
+    });
     assert.match(
       exposition,
       /occ_agent_operation_duration_seconds_count\{[^\n]*operation="stop"[^\n]*\} 1(?:\n|$)/,
@@ -6593,7 +6601,7 @@ test(
 
     await Promise.all([fixture.work(newer, "succeeded"), fixture.work(older, "succeeded")]);
     // The deploy duration is observed just before the newer revision's completion
-    // event, and the older retry's supersession completes without one.
+    // event; the older retry's supersession completes without a deploy observation.
     await completion(
       events,
       "the newer revision's successful completion",
