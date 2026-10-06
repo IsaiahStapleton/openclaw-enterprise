@@ -1781,7 +1781,7 @@ test("Agent credential Secret picker searches, validates, and preserves duplicat
 
   // A denied create is a known rejection: it names the permission and keeps the input editable.
   createStatus = 403;
-  conflictCode = "ACCESS_DENIED";
+  conflictCode = "FORBIDDEN";
   await dialog.getByLabel("Name", { exact: true }).fill("Denied picker Secret");
   await dialog.getByRole("button", { name: "Create Secret", exact: true }).click();
   await dialog
@@ -3764,9 +3764,10 @@ test("a read-only viewer is denied saved settings and native admin once per tab,
   await waitForSettledFetches(page, nativeAdminPath, 1);
   assert.equal(reads(nativeAdminPath), 1);
   assert.equal(reads(configurationPath), 1);
-  // The card records the denial and stays hidden: a 403 is not a failed read with Refresh.
+  // The card settles on the denial and stays hidden: a 403 is not a failed read with Refresh.
   await page.waitForFunction(
-    () => globalThis.document.querySelector(".native-admin-access [role='alert']")?.textContent,
+    () =>
+      globalThis.document.querySelector(".native-admin-access [role='status']")?.textContent === "",
   );
   assert.equal(await page.locator(".native-admin-access:not([hidden])").count(), 0);
 
