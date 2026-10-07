@@ -1430,11 +1430,29 @@ test(
     );
     assert.equal(pending, undefined, "the disable raced the admitted request");
     assert.deepEqual((await roleIds()).sort(), rolesBefore.sort());
-    await pool.query(
-      `UPDATE occ.human_authentication_accounts
-       SET disabled = false, version = version + 1 WHERE user_id = $1`,
-      [admin.userId],
+    const setAdminDisabled = (disabled) =>
+      pool.query(
+        `UPDATE occ.human_authentication_accounts
+         SET disabled = $2, version = version + 1 WHERE user_id = $1`,
+        [admin.userId, disabled],
+      );
+    await setAdminDisabled(false);
+
+    // ServicePrincipal creation is a policy write too: a disable after admission creates none.
+    pending = {
+      matches: namespaceRead(admin.principalId),
+      run: () => setAdminDisabled(true),
+    };
+    await assert.rejects(
+      controller.createIAMServicePrincipal(admin.principalId, namespace.id),
+      AuthorizationDeniedError,
     );
+    assert.equal(pending, undefined, "the disable raced the admitted ServicePrincipal create");
+    assert.deepEqual(
+      await state.read((unit) => unit.iamPolicy.listServicePrincipals(namespace.id)),
+      [],
+    );
+    await setAdminDisabled(false);
 
     // Inside the transaction, the actor's account and Namespace stay locked until
     // COMMIT: a disable or a policy write in that Namespace cannot slip in.

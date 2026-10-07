@@ -138,10 +138,13 @@ test("IPv6 trusted proxies outside the mapped catch-all keep their subnet semant
     ["::/96", "::192.0.2.1"],
     ["::fffe:0:0/96", "::fffe:c000:201"],
     ["64:ff9b::/96", "64:ff9b::192.0.2.1"],
+    // Only ::ffff:0:0/96 is IPv4-mapped: a nonzero fifth group keeps an IPv6 host.
+    ["::1:ffff:c000:201/128", "::1:ffff:c000:201"],
   ]) {
     const config = clientAddressConfiguration({ OCC_AUTH_TRUSTED_PROXY_CIDRS: cidr });
     assert.equal(config.trusts(host), true, cidr);
     assert.equal(config.trusts("8.8.8.8"), false, cidr);
+    assert.equal(config.trusts("192.0.2.1"), false, cidr);
   }
 });
 
