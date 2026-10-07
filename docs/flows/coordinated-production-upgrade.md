@@ -252,7 +252,7 @@ access, and required restore behavior.
 
 ## Changelog
 
-- 2026-10-07 22:00: Refuse a two-cluster upgrade before quiescence when the execution chart lacks this release's tenant grants.
+- 2026-10-07 21:20: Refuse a two-cluster upgrade before quiescence when the execution chart lacks this release's tenant grants. (fix-758)
 
 - 2026-10-07 12:00: Say that a controller-only release leaves existing revisions on their old Pod specification until the next deployment. (dogfood-r43)
 

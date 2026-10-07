@@ -277,7 +277,11 @@ when a listed Preset file is missing from the image, split-layout tenants remain
 or the name
 [breaks the rule](production-upgrade-recovery.md#correct-an-invalid-installation-name),
 the command prints each failure, deletes these resources, and stops; the old
-release keeps serving. Logs and
+release keeps serving. On the experimental two-cluster profile, each Pod also
+checks, as its execution cluster identity, that the
+[execution chart](../../testing/two-cluster-local.md#upgrade-the-execution-chart)
+grants this release's tenant rules, and refuses if not; this applies to
+runtime-only upgrades too. Logs and
 status are saved as `preflight-<api|worker>.log` and `-status.json`, taking up
 to about 90 seconds past `--timeout-seconds`. Runtime upgrades use the current
 controller image. If the helper is killed, delete its leftovers with

@@ -2647,6 +2647,8 @@ export class KubernetesComputeDriver implements ComputeDriver {
               : []),
           ]
         : [{ verb: "patch", resource: "pods" }];
+    const describe = (rule: Rule) =>
+      `${rule.verb} ${rule.resource}${rule.subresource === undefined ? "" : `/${rule.subresource}`}`;
     const clients = await this.clients("execution");
     const allowed = async (namespace: string, rule: Rule) => {
       const review = await this.request(() =>
@@ -2666,32 +2668,49 @@ export class KubernetesComputeDriver implements ComputeDriver {
           },
         }),
       );
-      return review.status?.allowed === true;
-    };
-    let continuation: string | undefined;
-    do {
-      const namespaces = await this.request(() =>
-        clients.core.listNamespace({
-          labelSelector: "openclaw.dev/namespace",
-          limit: 100,
-          ...(continuation === undefined ? {} : { _continue: continuation }),
-          timeoutSeconds: Math.ceil(REQUEST_TIMEOUT_MS / 1000),
-        }),
-      );
-      if (!Array.isArray(namespaces.items)) {
-        throw new Error("The execution cluster Namespace list returned invalid data.");
+      if (review.status?.allowed === true) {
+        return true;
       }
-      for (const item of namespaces.items) {
-        const namespace = item.metadata?.name;
-        if (!isNonEmptyString(namespace) || !(await allowed(namespace, bound))) {
+      // A denial the authorizer could not evaluate is not proof of a missing grant.
+      if (isNonEmptyString(review.status?.evaluationError)) {
+        throw new Error(
+          `could not evaluate ${describe(rule)} in Namespace ${namespace}: ` +
+            review.status.evaluationError,
+        );
+      }
+      return false;
+    };
+    try {
+      // Read every page first: reviews between pages could outlive the continue token.
+      const names: string[] = [];
+      let continuation: string | undefined;
+      do {
+        const namespaces = await this.request(() =>
+          clients.core.listNamespace({
+            labelSelector: "openclaw.dev/namespace",
+            limit: 100,
+            ...(continuation === undefined ? {} : { _continue: continuation }),
+            timeoutSeconds: Math.ceil(REQUEST_TIMEOUT_MS / 1000),
+          }),
+        );
+        if (!Array.isArray(namespaces.items)) {
+          throw new Error("the Namespace list returned invalid data.");
+        }
+        for (const item of namespaces.items) {
+          if (isNonEmptyString(item.metadata?.name)) {
+            names.push(item.metadata.name);
+          }
+        }
+        continuation = namespaces.metadata?._continue || undefined;
+      } while (continuation !== undefined);
+      for (const namespace of names) {
+        if (!(await allowed(namespace, bound))) {
           continue;
         }
         const missing: string[] = [];
         for (const rule of required) {
           if (!(await allowed(namespace, rule))) {
-            missing.push(
-              `${rule.verb} ${rule.resource}${rule.subresource === undefined ? "" : `/${rule.subresource}`}`,
-            );
+            missing.push(describe(rule));
           }
         }
         if (missing.length > 0) {
@@ -2701,8 +2720,17 @@ export class KubernetesComputeDriver implements ComputeDriver {
           );
         }
       }
-      continuation = namespaces.metadata?._continue || undefined;
-    } while (continuation !== undefined);
+    } catch (error) {
+      if (error instanceof ConfigurationFailure) {
+        throw error;
+      }
+      throw new Error(
+        `The execution cluster tenant grant review failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { cause: error },
+      );
+    }
   }
 
   validateRepositoryCredentialSupport(sandboxDriverId?: string): void {

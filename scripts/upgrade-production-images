@@ -363,6 +363,8 @@ preflight_startup() {
               message+=" See docs/reference/drivers/kubernetes-compute.md#existing-split-layout-installations."
             elif [[ "$refusal" == *"openclaw-execution chart"* ]]; then
               message+=" Upgrade the execution release as in docs/testing/two-cluster-local.md#upgrade-the-execution-chart, then start again with a new evidence directory."
+            elif [[ "$refusal" == *"execution cluster tenant grant review failed"* ]]; then
+              message+=" The Pod used its execution cluster kubeconfig, which must list Namespaces and create SelfSubjectAccessReviews there; fix that access and start again with a new evidence directory."
             else
               message+=" The Pod uses the installed release's service account and RBAC and only the chart's dependency egress (preflight-networkpolicy.json); fix its Kubernetes API access and start again with a new evidence directory."
             fi
