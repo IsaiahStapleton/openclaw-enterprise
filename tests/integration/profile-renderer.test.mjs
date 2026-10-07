@@ -688,6 +688,11 @@ test("preflight rejects metrics and native admin inputs that Helm would reject",
       ` ${space}https://console.oce.example.internal${space} `,
     ]),
     "https://console.oce.example.internal\u0378",
+    // Like the chart: spaces and invisible characters inside the host. The host parser refuses
+    // spaces, and drops tabs and most invisible characters.
+    ...[" ", "\u00a0", "\u2003", "\u3000", "\u2028", "\t", "\ufeff", "\u200b", "\u00ad"].map(
+      (space) => `https://console${space}.oce.example.internal`,
+    ),
   ]) {
     assertPreflightFailure(
       "codex",
@@ -696,10 +701,13 @@ test("preflight rejects metrics and native admin inputs that Helm would reject",
     );
   }
   // The API accepts these, and so does the renderer: ASCII spaces and tabs at the ends, which
-  // URL parsing strips, and a host with non-ASCII letters.
+  // URL parsing strips, and hosts with non-ASCII letters, including the joiners U+200C and
+  // U+200D that some IDN labels need.
   for (const authBaseUrl of [
     " \thttps://console.oce.example.internal\t ",
     "https://bücher.oce.example.internal",
+    "https://\u0646\u0627\u0645\u0647\u200c\u0627\u06cc.oce.example.internal",
+    "https://\u0915\u094d\u200d\u0937.oce.example.internal",
   ]) {
     const output = render(
       "codex",
@@ -888,6 +896,25 @@ test(
     assert.match(oidcManifests, /name: OCC_AUTH_OIDC_TOKEN_AUTH\n\s+value: "client_secret_basic"/);
     assert.match(oidcManifests, /name: OCC_AUTH_OIDC_DISPLAY_NAME\n\s+value: "Acme SSO"/);
     assert.match(oidcManifests, /name: openclaw-enterprise-api-oidc-login-egress/);
+    // The API trims each OIDC URL with JavaScript's trim before its checks, and so do the chart
+    // and the renderer, which keep the value as written.
+    const padded = render(
+      "openclaw",
+      externalSignInInput({
+        github: undefined,
+        oidc: {
+          issuer: " https://sso.example.com/realms/acme ",
+          authorizationUrl: "\thttps://sso.example.com/realms/acme/protocol/openid-connect/auth",
+          tokenUrl: "\u00a0https://sso.example.com/realms/acme/protocol/openid-connect/token\ufeff",
+          jwksUrl: "https://sso.example.com/realms/acme/protocol/openid-connect/certs\u3000",
+        },
+      }),
+    );
+    assert.equal(padded.summary.ok, true, padded.preflight.errors.join("\n"));
+    assert.match(
+      helmTemplate(padded),
+      /name: OCC_AUTH_OIDC_ISSUER\n\s+value: " https:\/\/sso\.example\.com\/realms\/acme "/,
+    );
 
     // Password-only installs behind ingress-nginx keep native admin and still trust the proxy.
     const nativeAdmin = render(
@@ -975,6 +1002,30 @@ test("preflight rejects external sign-in and trusted proxy inputs Helm would rej
       /controlPlane.oidc.issuer must be an https URL/,
     ],
     [{ issuer: "https://203.0.113.10/" }, /controlPlane.oidc.issuer must be an https URL/],
+    // Like the chart and the API: an explicit port on the issuer, and a value padded with
+    // U+0085, which JavaScript's trim keeps.
+    [
+      { issuer: "https://tenant.idp.example.test:443/" },
+      /controlPlane.oidc.issuer must be an https URL/,
+    ],
+    [
+      { issuer: "\u0085https://tenant.idp.example.test/" },
+      /controlPlane.oidc.issuer must be an https URL/,
+    ],
+    // Like the chart, though URL parsing repairs these into the issuer's host: a tab or a
+    // percent-escape in the host, backslashes, and a host that is not spelled in ASCII.
+    ...[
+      "https://tenant.idp.exam\tple.test/",
+      "https://tenant.idp.example.%74est/",
+      "https:\\\\tenant.idp.example.test\\",
+      "https://tenant.idp.examplé.test/",
+      // A host longer than 253 characters.
+      `https://${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(60)}.test/`,
+    ].map((issuer) => [{ issuer }, /controlPlane.oidc.issuer must be an https URL/]),
+    [
+      { tokenUrl: "https://tenant.idp.exam\tple.test/oauth/token" },
+      /controlPlane.oidc.tokenUrl must be an https URL on port 443 on the issuer's host/,
+    ],
     [
       { tokenUrl: "https://other.example.test/token" },
       /controlPlane.oidc.tokenUrl must be an https URL on port 443 on the issuer's host/,

@@ -212,11 +212,14 @@ function stripUrlEdges(value) {
 // Like the chart, this also refuses spellings URL parsing repairs: https:host, /. and /%2e,
 // and other Unicode spaces or invisible characters at either end (NBSP, U+3000, U+FEFF,
 // U+200B), which the API's parser keeps and mostly refuses. Both ends must be a letter, mark,
-// number, punctuation or symbol, as in the chart.
+// number, punctuation or symbol, as in the chart. Inside, the chart also allows the joiners
+// U+200C and U+200D that some IDN labels need, and refuses other spaces and invisible
+// characters: the host parser refuses spaces, and drops tabs and most invisible characters.
 function httpOrigin(value) {
   const stripped = stripUrlEdges(value);
   if (
     /^[^\p{L}\p{M}\p{N}\p{P}\p{S}]|[^\p{L}\p{M}\p{N}\p{P}\p{S}]$/u.test(stripped) ||
+    /[^\p{L}\p{M}\p{N}\p{P}\p{S}\u200c\u200d]/u.test(stripped) ||
     !/^https?:\/\/[^/?#]*\/?(?:[?#].*)?$/i.test(stripped)
   ) {
     return false;
@@ -480,15 +483,25 @@ function signInProvider(source, name, diagnostics) {
   return rendered;
 }
 
-// The OIDC URLs as the chart and API accept them: https on 443, a DNS host, and no
-// userinfo, query or fragment. Returns the lowercase host, or undefined.
-function oidcEndpointHost(value) {
-  if (/[?#]/.test(value)) {
+// The chart's OIDC URL pattern: https, a DNS host spelled in ASCII, an optional :443, and a
+// path without a query or fragment.
+const oidcEndpoint =
+  /^https:\/\/((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?)(?::443)?(?:\/[^?#]*)?$/i;
+
+// The OIDC URLs as both the chart and the API accept them: https on 443, a DNS host, and no
+// userinfo, query or fragment. Like both, it checks the value after JavaScript's trim, which
+// the API applies. URL parsing repairs spellings the chart refuses (a tab or a percent-escape
+// in the host, an IDN host, backslashes), so the chart's pattern applies too, and an issuer
+// must not name a port. Returns the lowercase host, or undefined.
+function oidcEndpointHost(value, { issuer = false } = {}) {
+  const trimmed = value.trim();
+  const match = oidcEndpoint.exec(trimmed);
+  if (match === null || match[1].length > 253 || (issuer && /^https:\/\/[^/]*:/i.test(trimmed))) {
     return undefined;
   }
   let url;
   try {
-    url = new URL(value);
+    url = new URL(trimmed);
   } catch {
     return undefined;
   }
@@ -506,11 +519,12 @@ function renderOidc(source, diagnostics) {
   const path = ["controlPlane", "oidc"];
   const rendered = signInProvider(source, "oidc", diagnostics);
   const issuer = asString(source, [...path, "issuer"], diagnostics, {
-    validate: (value) => oidcEndpointHost(value) !== undefined,
-    description: "an https URL on port 443 with a DNS host name and no query or fragment",
+    validate: (value) => oidcEndpointHost(value, { issuer: true }) !== undefined,
+    description:
+      "an https URL on port 443 with a DNS host name and no query or fragment, written without a port",
   });
   rendered.issuer = issuer;
-  const host = oidcEndpointHost(issuer);
+  const host = oidcEndpointHost(issuer, { issuer: true });
   for (const key of ["authorizationUrl", "tokenUrl", "jwksUrl"]) {
     rendered[key] = asString(source, [...path, key], diagnostics, {
       validate: (value) => host === undefined || oidcEndpointHost(value) === host,
