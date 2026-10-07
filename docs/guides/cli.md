@@ -102,7 +102,7 @@ principal. The key never reaches another Namespace, IAM policy, or key issuance.
 sets `OCC_SERVICE_KEY_FILE` to it and `OCC_NAMESPACE` to the Namespace. When the
 key is no longer needed, run `occ service-key revoke <key-id>` (the ID printed
 at creation) or delete its AccessBindings. Disabling the member's console
-account does not end the key, so do this when they leave.
+account does not end the key, so revoke it when they leave.
 
 ## Choose your next task
 
