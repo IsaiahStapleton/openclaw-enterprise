@@ -3260,25 +3260,26 @@ async function assertDedicatedSkillSources(topology) {
 }
 
 async function assertGatewayEffectiveDefaultModel(context, topology, expectedModel) {
-  const actualModel = JSON.parse(
-    await execNode(
-      topology.gatewayPlacement,
+  // Read through the shipped CLI instead of a removed plugin SDK export.
+  const model = JSON.parse(
+    await kubectl(
+      "exec",
       topology.gatewayPod.metadata.name,
-      `
-    (async () => {
-      const { loadConfig } = await import("openclaw/plugin-sdk/config-runtime");
-      const model = loadConfig({ pin: false }).agents?.defaults?.model;
-      const primary = typeof model === "string" ? model : model?.primary;
-      if (typeof primary !== "string" || !primary.trim()) {
-        throw new Error("Effective runtime config did not expose agents.defaults.model");
-      }
-      process.stdout.write(JSON.stringify(primary));
-    })().catch(error => {
-      console.error(error);
-      process.exit(1);
-    });
-  `,
+      "--namespace",
+      topology.gatewayPlacement,
+      "--",
+      "node",
+      "/app/openclaw.mjs",
+      "config",
+      "get",
+      "agents.defaults.model",
+      "--json",
     ),
+  );
+  const actualModel = typeof model === "string" ? model : model?.primary;
+  assert.ok(
+    typeof actualModel === "string" && actualModel.trim(),
+    "Effective runtime config did not expose agents.defaults.model",
   );
   assert.equal(
     actualModel,
