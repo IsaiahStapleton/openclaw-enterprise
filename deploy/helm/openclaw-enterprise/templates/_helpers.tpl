@@ -57,7 +57,7 @@ an allowlist without its provider is refused: the API treats it as a startup err
 {{- if eq $github.secretName (index $.Values.repositoryCredentials $name) -}}{{- fail (printf "auth.github credentials must use a Secret distinct from repositoryCredentials.%s" $name) -}}{{- end -}}
 {{- end -}}
 {{- end -}}
-{{- if not (hasPrefix "https://" .Values.auth.baseUrl) -}}{{- fail "auth.github requires an HTTPS auth.baseUrl" -}}{{- end -}}
+{{- if ne $baseUrl.scheme "https" -}}{{- fail "auth.github requires an HTTPS auth.baseUrl" -}}{{- end -}}
 {{- if .Values.agentNativeAdmin.enabled -}}{{- fail "auth.github requires agentNativeAdmin.enabled: false; GitHub sign-in supports host-only cookies only" -}}{{- end -}}
 {{- if not (or (kindIs "invalid" $github.egressCidrs) (kindIs "slice" $github.egressCidrs)) -}}{{- fail "auth.github.egressCidrs must be a list of IPv4 CIDRs; leave it unset, or set [] in a values file or with --set-json, for HTTPS egress to any non-link-local address" -}}{{- end -}}
 {{- range $cidr := $github.egressCidrs -}}
@@ -79,7 +79,7 @@ an allowlist without its provider is refused: the API treats it as a startup err
 {{- if eq $google.secretName (index $.Values.repositoryCredentials $name) -}}{{- fail (printf "auth.google credentials must use a Secret distinct from repositoryCredentials.%s" $name) -}}{{- end -}}
 {{- end -}}
 {{- end -}}
-{{- if not (hasPrefix "https://" .Values.auth.baseUrl) -}}{{- fail "auth.google requires an HTTPS auth.baseUrl" -}}{{- end -}}
+{{- if ne $baseUrl.scheme "https" -}}{{- fail "auth.google requires an HTTPS auth.baseUrl" -}}{{- end -}}
 {{- if .Values.agentNativeAdmin.enabled -}}{{- fail "auth.google requires agentNativeAdmin.enabled: false; Google sign-in supports host-only cookies only" -}}{{- end -}}
 {{- if not (or (kindIs "invalid" $google.egressCidrs) (kindIs "slice" $google.egressCidrs)) -}}{{- fail "auth.google.egressCidrs must be a list of IPv4 CIDRs; leave it unset, or set [] in a values file or with --set-json, for HTTPS egress to any non-link-local address" -}}{{- end -}}
 {{- range $cidr := $google.egressCidrs -}}
@@ -101,7 +101,7 @@ an allowlist without its provider is refused: the API treats it as a startup err
 {{- if eq $oidc.secretName (index $.Values.repositoryCredentials $name) -}}{{- fail (printf "auth.oidc credentials must use a Secret distinct from repositoryCredentials.%s" $name) -}}{{- end -}}
 {{- end -}}
 {{- end -}}
-{{- if not (hasPrefix "https://" .Values.auth.baseUrl) -}}{{- fail "auth.oidc requires an HTTPS auth.baseUrl" -}}{{- end -}}
+{{- if ne $baseUrl.scheme "https" -}}{{- fail "auth.oidc requires an HTTPS auth.baseUrl" -}}{{- end -}}
 {{- if .Values.agentNativeAdmin.enabled -}}{{- fail "auth.oidc requires agentNativeAdmin.enabled: false; OIDC sign-in supports host-only cookies only" -}}{{- end -}}
 {{- /* The API's startup checks, mirrored: https on 443, a DNS host, no userinfo, query or fragment, and one host for all four. */ -}}
 {{- $endpoint := "^(?i)https://(([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?)(:443)?(/[^?#]*)?$" -}}
@@ -162,6 +162,8 @@ an allowlist without its provider is refused: the API treats it as a startup err
 {{- if not (or (eq $authBaseHost $sharedCookieDomain) (hasSuffix (printf ".%s" $sharedCookieDomain) $authBaseHost)) -}}{{- fail "agentNativeAdmin.sharedCookieDomain must contain the auth.baseUrl host" -}}{{- end -}}
 {{- if not .Values.gatewayRouting.enabled -}}{{- fail "agentNativeAdmin.enabled requires gatewayRouting.enabled so the API can reach private Agent gateways" -}}{{- end -}}
 {{- end -}}
+{{- /* The bootstrap Job, in production, refuses plain HTTP unless the host is 127.0.0.1 or localhost. */ -}}
+{{- if and (ne $baseUrl.scheme "https") (not (has (lower $baseUrl.hostname) (list "127.0.0.1" "localhost"))) -}}{{- fail "auth.baseUrl must use HTTPS unless its host is 127.0.0.1 or localhost; the bootstrap Job refuses plain HTTP elsewhere" -}}{{- end -}}
 {{- if not .Values.bootstrap.adminEmail -}}{{- fail "bootstrap.adminEmail must identify the first administrator account" -}}{{- end -}}
 {{- if or (not .Values.bootstrap.password.claimName) (not .Values.bootstrap.password.mountPath) (not .Values.bootstrap.password.fileName) -}}
 {{- fail "bootstrap.password must reference an existing protected PVC output path" -}}
