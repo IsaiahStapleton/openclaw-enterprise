@@ -4889,8 +4889,47 @@ test("Agent provisioning API validates inline configuration with existing Secret
     `/namespaces/${namespace.data.id}/agents/provision`,
     { body: provisioningRequestBody(namespace.data.id, secrets) },
   );
-  fixture.state.restrictions.pop();
   assert.equal(refusedUnauthorized.status, 403, JSON.stringify(refusedUnauthorized.body));
+  // Authorization also precedes OCC's own plan checks. Each body below draws a 400 or 404 from
+  // an authorized caller; without the grant it is the same 403, so a caller learns nothing about
+  // a Namespace they cannot provision in from how the plan is refused.
+  const planRefusals = [
+    [
+      "omitted execution mode",
+      provisioningRequestBody(namespace.data.id, secrets, { executionMode: undefined }),
+      400,
+    ],
+    [
+      "no Harness authentication",
+      provisioningRequestBody(namespace.data.id, secrets, { harnessAuth: null }),
+      404,
+    ],
+    [
+      "runtime Harness authentication",
+      provisioningRequestBody(namespace.data.id, secrets, { harnessAuth: { method: "runtime" } }),
+      404,
+    ],
+  ];
+  for (const [description, body] of planRefusals) {
+    const denied = await injectedRequest(
+      fixture.app,
+      "POST",
+      `/namespaces/${namespace.data.id}/agents/provision`,
+      { body },
+    );
+    assert.equal(denied.status, 403, `${description}: ${JSON.stringify(denied.body)}`);
+    assert.equal(denied.body.error.code, "FORBIDDEN", description);
+  }
+  fixture.state.restrictions.pop();
+  for (const [description, body, status] of planRefusals) {
+    const refused = await injectedRequest(
+      fixture.app,
+      "POST",
+      `/namespaces/${namespace.data.id}/agents/provision`,
+      { body },
+    );
+    assert.equal(refused.status, status, `${description}: ${JSON.stringify(refused.body)}`);
+  }
   // The logged reason keeps at most 512 characters, and a thrown non-Error's value is not logged.
   for (const [thrown, reason] of [
     [new Error("r".repeat(600)), "r".repeat(512)],

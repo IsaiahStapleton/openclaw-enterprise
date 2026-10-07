@@ -1873,6 +1873,11 @@ export class OpenClawController {
     input: ProvisionAgentInput,
     auditEvent?: (result: Readonly<ProvisionAgentResult>) => AuditEvent,
   ): Promise<Readonly<ProvisionAgentResult>> {
+    // Authorize the Namespace-level grants before reading the plan, as status and retry do: a
+    // caller without them gets the same audited denial whatever the body says, and never a
+    // validation answer about a Namespace they cannot provision in. A replay needs these too
+    // (authorizeProvisioningRecord), so the order changes no authorized outcome.
+    await this.authorizeProvisioningRequest(principalId, input.namespaceId);
     const requestId = requireProvisioningRequestId(input.requestId);
     if (!isName(input.name)) {
       throw new ScopeViolationError("The Agent name is invalid.");
@@ -1915,7 +1920,7 @@ export class OpenClawController {
         "Agent provisioning requires dedicated Harness authentication.",
       );
     }
-    // Refuse before any lookup, authorization or write: the worker cannot hand off a
+    // Refuse before any lookup or write: the worker cannot hand off a
     // credential-source plan, and admission does not authorize the source.
     if (harnessAuth.method === "credential_source") {
       throw new SecretBindingValidationError(
@@ -1950,16 +1955,6 @@ export class OpenClawController {
       state.provisioning.findByRequest(input.namespaceId, principalId, requestId),
     );
     if (replay === undefined) {
-      await this.authorize(principalId, "create", {
-        kind: "agent",
-        id: input.namespaceId,
-        namespaceId: input.namespaceId,
-      });
-      await this.authorize(principalId, "create", {
-        kind: "configuration",
-        id: input.namespaceId,
-        namespaceId: input.namespaceId,
-      });
       // A replay is checked against the current Installation by authorizeProvisioningRecord.
       validateComputeAgentProvisioning(compute, executionMode, configurationInput.values);
       // Reject foreign references before channel validation can report them as a scope miss.
