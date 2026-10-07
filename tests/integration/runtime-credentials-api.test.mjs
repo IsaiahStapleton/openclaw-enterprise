@@ -174,8 +174,8 @@ async function createFixture(t, options = {}) {
     },
   });
   await app.listen({ host: "127.0.0.1", port, reusePort: reservation.reusePort });
-  await reservation.release();
   t.after(() => app.close());
+  await reservation.release();
   const adminSession = await signInWithEmailPassword({ origin, ...credentials });
   let bootstrapped = false;
 
