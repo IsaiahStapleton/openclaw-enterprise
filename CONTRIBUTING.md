@@ -104,32 +104,29 @@ defect, not merely restate mocks.
 Use the [developer skills](docs/testing/developer-skills.md) for test quality,
 proof selection, diff cleanup, and requested independent review.
 
-By default, open new PRs from a topic branch in your own fork against
-`openclaw/openclaw-enterprise`. This is the default for core team members too,
-even with upstream write access. Maintainers may continue using upstream topic
-branches in authorized workflows, and agents follow existing user instructions
-that select that path. Maintainers retain their review, merge, and approved
-bypass permissions. When updating an assigned existing PR, keep its head
-repository and branch.
+By default, open new PRs from an authorized topic branch in
+`openclaw/openclaw-enterprise` against `main`. Agents must not create or select
+a fork unless the user explicitly requests it; report missing upstream push
+access instead. Maintainers retain their review, merge, and approved bypass
+permissions. When updating an assigned existing PR, keep its head repository
+and branch.
 
 Before publishing, verify the authenticated GitHub account with
 `gh api user --jq .login` and confirm it matches the requesting contributor.
-For the default workflow, create or reuse that contributor's fork. Inspect the
-actual fetch and push URLs with `git remote -v`; preserve existing remotes.
-In a new fork checkout, `origin` usually points to the fork and `upstream` to
-`openclaw/openclaw-enterprise`, but remote names do not establish ownership.
+Inspect the actual fetch and push URLs with `git remote -v`; preserve existing
+remotes. Remote names do not establish ownership or the intended destination.
 Fetch the intended upstream base before comparing or refreshing a branch.
 
 Before each push, verify the destination repository's push URL, destination ref,
 remote head, and author of any existing PR. Stop on unexpected changes. After replacing
-`FORK_REMOTE`, `CONTRIBUTOR_LOGIN`, and `BRANCH` with the verified values and
+`UPSTREAM_REMOTE` and `BRANCH` with the verified values and
 writing the PR description to `/tmp/enterprise-pr.md`, publish with explicit
 head and base repositories:
 
 ```sh
-git push FORK_REMOTE HEAD:refs/heads/BRANCH
+git push UPSTREAM_REMOTE HEAD:refs/heads/BRANCH
 gh pr create --repo openclaw/openclaw-enterprise --base main \
-  --head CONTRIBUTOR_LOGIN:BRANCH --title "Describe the change" \
+  --head BRANCH --title "Describe the change" \
   --body-file /tmp/enterprise-pr.md
 ```
 

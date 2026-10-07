@@ -23,11 +23,11 @@ branch check before merge; complete the authorized publication after merge.
    their owners. Do not lower or bypass a gate to accept an older image.
 2. Push the candidate to its authorized PR branch and record the full head SHA.
    Select a repository and ref containing that exact commit with the native
-   workflow, configured runners, and required repository variables. For a fork
-   PR, use its head repository if configured; otherwise arrange an authorized
-   maintainer check of the same commit. An upstream branch with the same name
-   does not select a fork's commit. Do not change PR ownership or push another
-   author's branch to obtain a runner.
+   workflow, configured runners, and required repository variables. Use the
+   authorized upstream topic branch for new PRs. For an assigned PR in another
+   repository, arrange verification of its exact head commit; a branch with the
+   same name in upstream does not select that commit. Do not change PR ownership
+   or push another author's branch to obtain a runner.
 3. Dispatch **Check Native Container Images** (`container-check.yml`) on that
    ref. For example, after setting the verified repository and branch:
 
