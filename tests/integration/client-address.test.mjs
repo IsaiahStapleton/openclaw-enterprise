@@ -85,7 +85,7 @@ test("presets fix the client-address header; generic names its own", () => {
   assert.equal(generic.trusts("192.0.2.11"), false);
 });
 
-test("trusted proxy CIDRs refuse entries covering every address in either family", () => {
+test("trusted proxy CIDRs refuse catch-all IPv6 subnets and mapped addresses with IPv6 prefixes", () => {
   // Node also checks IPv4 peers against IPv6 subnets enclosing the mapped /96.
   for (const cidr of ["::/1", "::/8", "::/80", "::1/80", "::8000:1234:5678/81", "::fffe:0:0/95"]) {
     assert.throws(
@@ -103,7 +103,7 @@ test("trusted proxy CIDRs refuse entries covering every address in either family
   ]) {
     assert.throws(
       () => clientAddressConfiguration({ OCC_AUTH_TRUSTED_PROXY_CIDRS: cidr }),
-      /invalid CIDR/,
+      /IPv4-mapped address, whose prefix must be 1 through 32/,
       cidr,
     );
   }

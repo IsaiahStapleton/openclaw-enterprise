@@ -70,8 +70,17 @@ function parseCidr(entry: string): { address: string; prefix: number; family: "i
   if (rawPrefix !== undefined) {
     prefix = /^[0-9]{1,3}$/.test(rawPrefix) ? Number(rawPrefix) : NaN;
   }
-  if (extra !== undefined || version === 0 || !Number.isInteger(prefix) || prefix > bits) {
+  if (extra !== undefined || version === 0 || !Number.isInteger(prefix)) {
     throw new Error(`OCC_AUTH_TRUSTED_PROXY_CIDRS contains an invalid CIDR: ${entry}`);
+  }
+  if (prefix > bits) {
+    // A mapped spelling was canonicalized to IPv4 above, so its prefix is an IPv4 one.
+    const mapped = version === 4 && isIP(rawAddress!.trim()) === 6;
+    throw new Error(
+      mapped
+        ? `OCC_AUTH_TRUSTED_PROXY_CIDRS contains an IPv4-mapped address, whose prefix must be 1 through 32: ${entry}`
+        : `OCC_AUTH_TRUSTED_PROXY_CIDRS contains an invalid CIDR: ${entry}`,
+    );
   }
   // BlockList checks IPv4 peers against ::ffff:0:0/96, even in an IPv6 subnet.
   const coversIpv4 =

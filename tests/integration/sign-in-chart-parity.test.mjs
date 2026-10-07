@@ -665,7 +665,7 @@ const invalid = [
     values: { "api.trustedProxy.preset": "ingress-nginx", "api.trustedProxy.cidrs[0]": cidr },
     chart: /prefix must be 1 through 32/,
     env: { OCC_AUTH_TRUSTED_PROXY_PRESET: "ingress-nginx", OCC_AUTH_TRUSTED_PROXY_CIDRS: cidr },
-    parser: /invalid CIDR/,
+    parser: /IPv4-mapped address, whose prefix must be 1 through 32/,
   })),
   {
     name: "an invalid proxy address",
