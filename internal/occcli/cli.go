@@ -703,7 +703,7 @@ func (app *application) secretCommand() *cobra.Command {
 
 	get := &cobra.Command{
 		Use:   "get ID",
-		Short: "Show Secret metadata",
+		Short: "Show Secret metadata and the resources that reference it",
 		Args:  idArgs(secretIDArg),
 		RunE: func(_ *cobra.Command, args []string) error {
 			namespace, client, err := app.namespaceClient()
@@ -714,7 +714,7 @@ func (app *application) secretCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return app.printSecret(secret, false)
+			return app.printSecretDetail(secret)
 		},
 	}
 

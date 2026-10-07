@@ -5517,7 +5517,7 @@ Update a Preset without changing existing Agents
 | [`GET /namespaces/{namespaceId}/secrets`](#get-namespacesnamespaceidsecrets) | List readable Namespace-owned Secret metadata without revealing material |
 | [`POST /namespaces/{namespaceId}/secrets`](#post-namespacesnamespaceidsecrets) | Create exact Namespace-owned Secret material and return metadata only |
 | [`DELETE /namespaces/{namespaceId}/secrets/{secretId}`](#delete-namespacesnamespaceidsecretssecretid) | Delete exact unbound Namespace-owned Secret material |
-| [`GET /namespaces/{namespaceId}/secrets/{secretId}`](#get-namespacesnamespaceidsecretssecretid) | Get exact Namespace-owned Secret metadata without revealing material |
+| [`GET /namespaces/{namespaceId}/secrets/{secretId}`](#get-namespacesnamespaceidsecretssecretid) | Get exact Namespace-owned Secret metadata and its readable consumers |
 | [`PATCH /namespaces/{namespaceId}/secrets/{secretId}`](#patch-namespacesnamespaceidsecretssecretid) | Replace exact Namespace-owned Secret material and return stable metadata |
 
 #### `GET /namespaces/{namespaceId}/secrets`
@@ -5667,7 +5667,7 @@ Delete exact unbound Namespace-owned Secret material
 
 <span id="get-namespacesnamespaceidsecretssecretid"></span>
 
-Get exact Namespace-owned Secret metadata without revealing material
+Get exact Namespace-owned Secret metadata and its readable consumers
 
 **Operation ID:** `getSecret`
 
@@ -5701,6 +5701,13 @@ Get exact Namespace-owned Secret metadata without revealing material
 | Field | Type | Required | Constraints |
 | --- | --- | --- | --- |
 | `data` | `object` | Yes | — |
+| `data.consumers` | `object` | Yes | Current references that block deletion of the Secret. Returned by the exact Secret read only. |
+| `data.consumers.agents` | `array<string>` | Yes | max items: 50; Readable Agents whose draft, active revision, or pending deployment references the Secret. Each needs a new deployment to receive a rotated value. |
+| `data.consumers.configurations` | `array<string>` | Yes | max items: 50; Readable Configurations whose `secretBindings` reference the Secret. |
+| `data.consumers.credentialSources` | `array<string>` | Yes | max items: 50; Readable credential sources that hold the Secret. |
+| `data.consumers.provisioningRequests` | `array<string>` | Yes | max items: 50; Work IDs of queued or running Agent provisioning requests that reference the Secret, listed only for the actor that started them. |
+| `data.consumers.truncated` | `boolean` | Yes | `true` when the Secret has more than 50 references; only the first 50, ordered by kind and ID, are examined. |
+| `data.consumers.unreadable` | `integer` | Yes | minimum: 0; maximum: 50; Examined references to resources the caller may not read. They are counted, never named. |
 | `data.id` | `string` | Yes | pattern: `^sec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |
 | `data.name` | `string` | Yes | min length: 1; max length: 200; pattern: `^(?!\s)(?!.*\s$)[^\u0000-\u001f\u007f-\u009f\u2028\u2029]+$` |
 | `data.namespaceId` | `string` | Yes | pattern: `^ns_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` |

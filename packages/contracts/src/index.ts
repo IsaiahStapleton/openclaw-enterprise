@@ -244,6 +244,24 @@ export interface SecretMetadata extends SecretIdentity {
   readonly ref: SecretReference;
 }
 
+/**
+ * Current references that keep a Secret from deletion, limited to resources the caller may
+ * read. `unreadable` counts the examined references the caller may not read, without naming
+ * them; `truncated` means more references exist than OCC examined.
+ */
+export interface SecretConsumers {
+  readonly agents: readonly string[];
+  readonly configurations: readonly string[];
+  readonly credentialSources: readonly string[];
+  readonly provisioningRequests: readonly string[];
+  readonly unreadable: number;
+  readonly truncated: boolean;
+}
+
+export interface SecretDetail extends SecretMetadata {
+  readonly consumers: SecretConsumers;
+}
+
 export interface SecretBinding {
   readonly source: SecretReference;
   readonly delivery?: { readonly type: "env" };
