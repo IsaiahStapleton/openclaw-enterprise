@@ -10,8 +10,8 @@
 {{- /* URL parsing strips only C0 controls and spaces from the ends, so other Unicode spaces and invisible characters there (NBSP, U+3000, U+FEFF, U+200B) reach the API's parser, which refuses most of them. Both ends must be a letter, mark, number, punctuation or symbol (not Z or C, including unassigned code points). */ -}}
 {{- $baseUrlText := regexReplaceAll "^[\\x00-\\x20]+|[\\x00-\\x20]+$" (toString .Values.auth.baseUrl) "" -}}
 {{- if regexMatch "^[^\\pL\\pM\\pN\\pP\\pS]|[^\\pL\\pM\\pN\\pP\\pS]$" $baseUrlText -}}{{- fail "auth.baseUrl must not begin or end with Unicode spaces or invisible characters; the API's URL parser keeps them" -}}{{- end -}}
-{{- /* Inside, the host parser refuses spaces and drops most invisible characters. Only the joiners U+200C and U+200D, which some IDN labels need, may appear besides L, M, N, P and S. */ -}}
-{{- if regexMatch "[^\\pL\\pM\\pN\\pP\\pS\\x{200C}\\x{200D}]" $baseUrlText -}}{{- fail "auth.baseUrl must not contain spaces or invisible characters; the API's URL parser refuses spaces in a host" -}}{{- end -}}
+{{- /* Inside, the host parser refuses spaces, < and > (Go's URL parser keeps < and >), and drops most invisible characters. Only the joiners U+200C and U+200D, which some IDN labels need, may appear besides L, M, N, P and S; this also covers the ends, except for a joiner there. */ -}}
+{{- if regexMatch "[^\\pL\\pM\\pN\\pP\\pS\\x{200C}\\x{200D}]|[<>]" $baseUrlText -}}{{- fail "auth.baseUrl must not contain spaces, invisible characters, < or >; the API's URL parser refuses or drops them in a host" -}}{{- end -}}
 {{- /* The API and the bootstrap Job accept only an absolute HTTP(S) origin (validHttpBaseURL). */ -}}
 {{- $baseUrl := urlParse $baseUrlText -}}
 {{- $baseUrlPort := trimPrefix ":" (regexFind ":[0-9]+$" $baseUrl.host) -}}

@@ -688,11 +688,21 @@ test("preflight rejects metrics and native admin inputs that Helm would reject",
       ` ${space}https://console.oce.example.internal${space} `,
     ]),
     "https://console.oce.example.internal\u0378",
-    // Like the chart: spaces and invisible characters inside the host. The host parser refuses
-    // spaces, and drops tabs and most invisible characters.
-    ...[" ", "\u00a0", "\u2003", "\u3000", "\u2028", "\t", "\ufeff", "\u200b", "\u00ad"].map(
-      (space) => `https://console${space}.oce.example.internal`,
-    ),
+    // Like the chart: spaces, < and > and invisible characters inside the host. The host parser
+    // refuses spaces, < and >, and drops tabs and most invisible characters.
+    ...[
+      " ",
+      "<",
+      ">",
+      "\u00a0",
+      "\u2003",
+      "\u3000",
+      "\u2028",
+      "\t",
+      "\ufeff",
+      "\u200b",
+      "\u00ad",
+    ].map((space) => `https://console${space}.oce.example.internal`),
   ]) {
     assertPreflightFailure(
       "codex",

@@ -215,6 +215,9 @@ function stripUrlEdges(value) {
 // number, punctuation or symbol, as in the chart. Inside, the chart also allows the joiners
 // U+200C and U+200D that some IDN labels need, and refuses other spaces and invisible
 // characters: the host parser refuses spaces, and drops tabs and most invisible characters.
+// (URL parsing below refuses < and >, which the chart refuses explicitly.) Node's Unicode
+// tables can be newer than Helm's, so a letter assigned since then passes here and fails in
+// the chart; no realistic host uses one.
 function httpOrigin(value) {
   const stripped = stripUrlEdges(value);
   if (

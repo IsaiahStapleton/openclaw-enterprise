@@ -393,7 +393,7 @@ test(
     // U+2029 and U+FEFF) before its checks, and so does the chart. The env keeps the value as
     // written, and the API reads the trimmed one.
     const padded = {
-      issuer: ` ${fixtureOidcIssuer.issuer} `,
+      issuer: ` \u000b${fixtureOidcIssuer.issuer}\f `,
       authorizationUrl: `\t${fixtureOidcIssuer.authorizationUrl}\u00a0`,
       tokenUrl: `\u3000${fixtureOidcIssuer.tokenUrl}\ufeff`,
       jwksUrl: `\u2028${fixtureOidcIssuer.jwksUrl}\u2003 `,
@@ -1207,7 +1207,7 @@ test(
     const plainHttp = /auth\.baseUrl must use HTTPS unless its host is 127\.0\.0\.1 or localhost/;
     const unicodeEdge =
       /auth\.baseUrl must not begin or end with Unicode spaces or invisible characters/;
-    const unicodeInside = /auth\.baseUrl must not contain spaces or invisible characters/;
+    const unicodeInside = /auth\.baseUrl must not contain spaces, invisible characters, < or >/;
     const cases = [
       ...[
         "https://console.oce.example.internal/occ",
@@ -1276,7 +1276,7 @@ test(
           job: accepted,
         })),
       ),
-      // Inside the host, the parser refuses spaces, and drops tabs and most invisible
+      // Inside the host, the parser refuses spaces, < and >, and drops tabs and most invisible
       // characters. The chart refuses them all (deliberately stricter for the dropped ones),
       // but keeps the joiners U+200C and U+200D that some IDN labels need.
       ...[
@@ -1285,6 +1285,9 @@ test(
         ["\u2003", false],
         ["\u3000", false],
         ["\u2028", false],
+        // Go's URL parser keeps these, but the API's refuses them.
+        ["<", false],
+        [">", false],
         ["\t", true],
         ["\ufeff", true],
         ["\u200b", true],
