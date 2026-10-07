@@ -91,6 +91,8 @@ and `git-read` and `git-full` profiles. Upstream CIDRs must be approved IPv4 `/3
 endpoints. The runner never gives its observer token to an agent. Git commands and
 PR creation execute through the real native agent and repository broker; the
 observer reads independent remote state and cleans up only verified owned refs.
+Transcript completion uses a separate plain token so formatting the PR body's
+HTML comment cannot obscure a completed native turn.
 A private registry copy restricts pushes to this run’s exact branch names. Any
 existing push allowlist must permit those names. The repository stage enables
 native command tools explicitly; initial model/UI checks retain the preset tool
