@@ -345,10 +345,11 @@ export const sessionEvidenceScript = String.raw`
 // display transcript can omit exit status. Never start or replay a model turn.
 export const codexRepositoryEvidenceScript = String.raw`
   const assert = require("node:assert/strict");
-  ${PLUGIN_RUNTIME_HELPERS}
+  const WebSocket = require("ws");
   const marker = process.argv[1];
   const expected = JSON.parse(process.argv[2]);
   ${repositoryCommandEvidence}
+  ${PLUGIN_RUNTIME_HELPERS}
   (async () => {
     // Plugin-enabled peers rotate their transport token for each startup.
     // Resolve it through the same verified status contract as gateway startup;
@@ -358,38 +359,74 @@ export const codexRepositoryEvidenceScript = String.raw`
       const status = await readPeerPluginRuntimeStatus();
       process.env.APP_SERVER_TOKEN = derivePluginAppServerToken(status.startupId);
     }
-    // Client source labels vary across supported bridges; the exact task marker below selects the turn.
-    const listed = await codexAppServerRequest("thread/list", { limit: 20, modelProviders: [] });
-    assert.equal(listed.nextCursor, null, "fresh Agent must have a bounded thread inventory");
-    const matches = [];
-    for (const candidate of listed.data) {
-      const { thread } = await codexAppServerRequest("thread/read", { threadId: candidate.id, includeTurns: true });
-      for (const turn of thread.turns) {
-        if (!turn.items.some(item => item.type === "userMessage" && item.content.some(block => block.type === "text" && block.text.includes(marker)))) continue;
-        const commands = turn.items.filter(item => item.type === "commandExecution").map(item => {
-          // Codex reports the actual shell argv as a quoted command. Accept
-          // only its single non-login shell wrapper around one literal command.
-          let args = standaloneArguments(item.command);
-          if (args?.length === 3 && ["/bin/bash", "/bin/sh", "/usr/bin/bash"].includes(args[0]) && args[1] === "-c") args = standaloneArguments(args[2]);
-          const lines = typeof item.aggregatedOutput === "string" ? item.aggregatedOutput.split(/\r?\n/).map(line => line.trim()) : [];
-          return {
-            id: item.id,
-            operations: expected.filter(command => item.cwd === command.workdir && args?.length === command.argv.length && args.every((arg, index) => arg === command.argv[index])).map(command => command.operation),
-            status: item.status,
-            exitCode: item.exitCode,
-            http400: /returned error: 400\b/i.test(item.aggregatedOutput ?? ""),
-            sandboxDenied: /SANDBOX_DENIED:(?:EACCES|EPERM|EROFS)\b/.test(item.aggregatedOutput ?? ""),
-            commitShas: lines.filter(line => /^[a-f0-9]{40}$/.test(line)),
-            pullUrls: lines.filter(line => /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9][0-9]*$/.test(line)),
-          };
-        });
-        matches.push({ threadId: thread.id, turnId: turn.id, status: turn.status, commands });
+    // The gateway observes a remote peer, not the runtime helper's local client.
+    const socket = new WebSocket(process.env.APP_SERVER_URL, {
+      headers: { Authorization: "Bearer " + process.env.APP_SERVER_TOKEN },
+    });
+    const pending = new Map();
+    let nextId = 0;
+    const deadline = setTimeout(() => {
+      process.stderr.write("Codex repository evidence timed out\n");
+      socket.close();
+      process.exitCode = 1;
+    }, 20000);
+    const request = (method, params) => new Promise((resolve, reject) => {
+      const id = ++nextId;
+      pending.set(id, { resolve, reject });
+      socket.send(JSON.stringify({ id, method, params }));
+    });
+    socket.addEventListener("message", ({ data }) => {
+      const message = JSON.parse(String(data));
+      const operation = pending.get(message.id);
+      if (!operation) return;
+      pending.delete(message.id);
+      message.error ? operation.reject(new Error("Codex evidence request failed")) : operation.resolve(message.result);
+    });
+    socket.addEventListener("error", () => { process.exitCode = 1; });
+    socket.addEventListener("open", async () => {
+      try {
+        await request("initialize", { clientInfo: { name: "repository-acceptance-observer", version: "1.0.0" } });
+        socket.send(JSON.stringify({ method: "initialized" }));
+        // Client source labels vary across supported bridges; the exact task marker below selects the turn.
+        const listed = await request("thread/list", { limit: 20, modelProviders: [] });
+        assert.equal(listed.nextCursor, null, "fresh Agent must have a bounded thread inventory");
+        const matches = [];
+        for (const candidate of listed.data) {
+          const { thread } = await request("thread/read", { threadId: candidate.id, includeTurns: true });
+          for (const turn of thread.turns) {
+            if (!turn.items.some(item => item.type === "userMessage" && item.content.some(block => block.type === "text" && block.text.includes(marker)))) continue;
+            const commands = turn.items.filter(item => item.type === "commandExecution").map(item => {
+              // Codex reports the actual shell argv as a quoted command. Accept
+              // only its single non-login shell wrapper around one literal command.
+              let args = standaloneArguments(item.command);
+              if (args?.length === 3 && ["/bin/bash", "/bin/sh", "/usr/bin/bash"].includes(args[0]) && args[1] === "-c") args = standaloneArguments(args[2]);
+              const lines = typeof item.aggregatedOutput === "string" ? item.aggregatedOutput.split(/\r?\n/).map(line => line.trim()) : [];
+              return {
+                id: item.id,
+                operations: expected.filter(command => item.cwd === command.workdir && args?.length === command.argv.length && args.every((arg, index) => arg === command.argv[index])).map(command => command.operation),
+                status: item.status,
+                exitCode: item.exitCode,
+                http400: /returned error: 400\b/i.test(item.aggregatedOutput ?? ""),
+                sandboxDenied: /SANDBOX_DENIED:(?:EACCES|EPERM|EROFS)\b/.test(item.aggregatedOutput ?? ""),
+                commitShas: lines.filter(line => /^[a-f0-9]{40}$/.test(line)),
+                pullUrls: lines.filter(line => /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9][0-9]*$/.test(line)),
+              };
+            });
+            matches.push({ threadId: thread.id, turnId: turn.id, status: turn.status, commands });
+          }
+        }
+        assert.equal(matches.length, 1, "the repository task must identify one native Codex turn");
+        process.stdout.write(JSON.stringify(matches[0]));
+      } catch {
+        process.stderr.write("Codex repository evidence unavailable\n");
+        process.exitCode = 1;
+      } finally {
+        clearTimeout(deadline);
+        socket.close();
       }
-    }
-    assert.equal(matches.length, 1, "the repository task must identify one native Codex turn");
-    process.stdout.write(JSON.stringify(matches[0]));
+    });
   })().catch(() => {
-    process.stderr.write("Codex repository evidence unavailable\n");
+    process.stderr.write("Codex repository authentication unavailable\n");
     process.exitCode = 1;
   });
 `;
