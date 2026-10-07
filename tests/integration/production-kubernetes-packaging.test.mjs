@@ -2444,6 +2444,17 @@ test(
         "10.42.0.0/16",
         { value: `x-${"a".repeat(62)}` },
       ],
+      [
+        // ::ffff:d.d.d.d is an IPv4 address after the API rewrites it, so /32 stays valid.
+        {
+          "api.trustedProxy.preset": "generic",
+          "api.trustedProxy.cidrs[0]": "::ffff:192.0.2.1/32",
+          "api.trustedProxy.clientAddressHeader": "X-Client-Address",
+        },
+        "generic",
+        "::ffff:192.0.2.1/32",
+        { value: "x-client-address" },
+      ],
     ]) {
       const { selected, apiEnv, egress } = await signInObjects(overrides);
       assert.deepEqual(apiEnv.OCC_AUTH_TRUSTED_PROXY_CIDRS, { value: cidrs });
@@ -2591,6 +2602,36 @@ test(
         "a trusted proxy with an invalid IPv4 address",
         { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": "10.420.0.0/16" },
         /invalid IPv4 address/,
+      ],
+      [
+        "a trusted proxy with a leading-zero IPv4 address",
+        { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": "01.2.3.4/32" },
+        /invalid IPv4 address/,
+      ],
+      [
+        "a trusted proxy with a malformed IPv6 address",
+        { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": "a:/64" },
+        /invalid IPv6 address/,
+      ],
+      [
+        "a trusted proxy with more than one IPv6 compression",
+        { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": ":::/64" },
+        /invalid IPv6 address/,
+      ],
+      [
+        "a trusted proxy with too many IPv6 groups",
+        { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": "1:2:3:4:5:6:7:8:9/64" },
+        /invalid IPv6 address/,
+      ],
+      [
+        "a trusted proxy with a dotted tail before compression",
+        { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": "1.2.3.4::/96" },
+        /invalid IPv6 address/,
+      ],
+      [
+        "an IPv4-mapped trusted proxy with an IPv6 prefix",
+        { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": "::ffff:192.0.2.1/128" },
+        /prefix must be 1 through 32/,
       ],
       [
         "the internal client-address header",
