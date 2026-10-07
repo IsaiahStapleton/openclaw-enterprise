@@ -185,10 +185,11 @@ async function claimExpected(queue, idempotencyKey) {
   assert.fail(`The durable queue did not expose expected work ${idempotencyKey}.`);
 }
 
-// Claims and completes Work until every expected key was handed out, in whatever
-// order the queue picks. Use it for keys whose relative claim order the test does
-// not pin: claimExpected completes the Work it skips, so claiming such keys one by
-// one fails whenever the queue hands out a later key first.
+// Claims and completes Work, including any unrelated leftover Work, until every
+// expected key was handed out, in whatever order the queue picks. Use it for keys
+// whose relative claim order the test does not pin: claimExpected completes the
+// Work it skips, so claiming such keys one by one fails whenever the queue hands
+// out a later key first.
 async function completeExpected(queue, idempotencyKeys) {
   const pending = new Set(idempotencyKeys);
   for (let index = 0; index < 200 && pending.size > 0; index += 1) {
