@@ -86,6 +86,8 @@ import type {
   Secret,
   SecretBindings,
   SecretReference,
+  SecretConsumers,
+  SecretDetail,
   SecretDriver,
   SecretMetadata,
   ServiceAccount,
@@ -159,6 +161,7 @@ import {
   RuntimeLogsSandboxNotFoundError,
   ScopeViolationError,
   SecretBindingValidationError,
+  SecretReferencedError,
   SecretValueError,
 } from "./errors.ts";
 import { validateModelProviderSettings } from "./model-provider-settings.ts";
@@ -192,6 +195,7 @@ import {
   type PlatformOperation,
   type PlatformStateStore,
   type PlatformUnitOfWork,
+  type SecretReferenceKind,
 } from "./state/platform-state.ts";
 import {
   controllerWorkDeploymentStatus,
@@ -734,6 +738,25 @@ const RUNTIME_LOG_REQUEST_TIMEOUT_MS = 10_000;
  * gateway copy does not prove that no late create is still in flight, so the record is kept.
  */
 const CREDENTIAL_REGISTRATION_FENCE_MS = 2 * CREDENTIAL_GATEWAY_TIMEOUT_MS + 10_000;
+/**
+ * The most references a Secret read or delete examines. Each one costs an authorization
+ * check, so the bound keeps both the response and the IAM work small.
+ */
+const SECRET_CONSUMER_LIMIT = 50;
+const SECRET_CONSUMER_KINDS = Object.freeze([
+  "agents",
+  "configurations",
+  "credentialSources",
+  "provisioningRequests",
+] as const);
+const SECRET_CONSUMER_FIELDS: Readonly<
+  Record<SecretReferenceKind, (typeof SECRET_CONSUMER_KINDS)[number]>
+> = Object.freeze({
+  agent: "agents",
+  configuration: "configurations",
+  credential_source: "credentialSources",
+  provisioning_request: "provisioningRequests",
+});
 
 /** Rejects unknown and missing catalog fields before any Credential Gateway effect. */
 function credentialSourceFieldsMatch(
@@ -3580,7 +3603,7 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
     secretId: string,
-  ): Promise<Readonly<SecretMetadata>> {
+  ): Promise<Readonly<SecretDetail>> {
     await this.authorize(principalId, "read", { kind: "secret", id: secretId, namespaceId });
     return this.read(async (state) => {
       await this.exactNamespace(state, namespaceId);
@@ -3588,7 +3611,10 @@ export class OpenClawController {
       if (!secret) {
         throw new ScopeViolationError("The Secret does not belong to the exact Namespace.");
       }
-      return this.secretMetadata(secret);
+      return Object.freeze({
+        ...this.secretMetadata(secret),
+        consumers: await this.secretConsumers(state, principalId, namespaceId, secret.id),
+      });
     });
   }
 
@@ -3658,10 +3684,12 @@ export class OpenClawController {
       if (!secret) {
         throw new ScopeViolationError("The Secret does not belong to the exact Namespace.");
       }
-      if (await state.secrets.hasReferences(namespace.id, secret.id)) {
-        throw new ResourceStateConflictError(
-          "A Configuration, credential source, Agent draft, active revision, pending deployment, or pending Agent provisioning request still references the Secret. Remove those references, or let provisioning finish, first.",
-        );
+      const consumers = await this.secretConsumers(state, principalId, namespace.id, secret.id);
+      if (
+        consumers.unreadable > 0 ||
+        SECRET_CONSUMER_KINDS.some((kind) => consumers[kind].length > 0)
+      ) {
+        throw new SecretReferencedError(consumers);
       }
       const removed = await accessBindingsTargeting(state, namespace.id, "secret", secret.id);
       const driver = this.secretDriver(secret.driverId);
@@ -6576,6 +6604,125 @@ export class OpenClawController {
 
   private async canRead(principalId: string, resource: ResourceRef): Promise<boolean> {
     return (await this.authorizationDecision(principalId, "read", resource)).decision.allowed;
+  }
+
+  /**
+   * The current references to a Secret, named only where the caller may read the
+   * referencing resource; the rest are counted. One query, then one authorization check per
+   * examined reference, at most SECRET_CONSUMER_LIMIT of them.
+   */
+  private async secretConsumers(
+    state: Pick<PlatformReadView, "secrets" | "provisioning">,
+    principalId: string,
+    namespaceId: string,
+    secretId: string,
+  ): Promise<Readonly<SecretConsumers>> {
+    const page = await state.secrets.listReferences(namespaceId, secretId, SECRET_CONSUMER_LIMIT);
+    const named: Record<(typeof SECRET_CONSUMER_KINDS)[number], string[]> = {
+      agents: [],
+      configurations: [],
+      credentialSources: [],
+      provisioningRequests: [],
+    };
+    let unreadable = 0;
+    for (const reference of page.references) {
+      const readable =
+        reference.kind === "provisioning_request"
+          ? await this.canReadProvisioningRequest(state, principalId, namespaceId, reference.id)
+          : await this.canRead(principalId, {
+              kind: reference.kind,
+              id: reference.id,
+              namespaceId,
+            });
+      if (!readable) {
+        unreadable += 1;
+        continue;
+      }
+      named[SECRET_CONSUMER_FIELDS[reference.kind]].push(reference.id);
+    }
+    return Object.freeze({
+      agents: Object.freeze(named.agents),
+      configurations: Object.freeze(named.configurations),
+      credentialSources: Object.freeze(named.credentialSources),
+      provisioningRequests: Object.freeze(named.provisioningRequests),
+      unreadable,
+      truncated: page.truncated,
+    });
+  }
+
+  /**
+   * Whether the caller may read a pending provisioning request: only its initiating actor,
+   * holding the grants that its status read checks (`authorizeProvisioningRecord`). The plan
+   * checks that a status read also runs are admission, not authorization, so they are skipped;
+   * a stored plan that no longer parses is not named.
+   */
+  private async canReadProvisioningRequest(
+    state: Pick<PlatformReadView, "provisioning">,
+    principalId: string,
+    namespaceId: string,
+    workId: string,
+  ): Promise<boolean> {
+    const record = await state.provisioning.findByWorkId(workId);
+    if (
+      record === undefined ||
+      record.namespaceId !== namespaceId ||
+      record.actorId !== principalId
+    ) {
+      return false;
+    }
+    let plan: ReturnType<OpenClawController["provisioningPlan"]>;
+    try {
+      plan = this.provisioningPlan(record);
+    } catch (error) {
+      if (error instanceof DependencyUnavailableError) {
+        throw error;
+      }
+      return false;
+    }
+    const harnessAuth = plan.harnessAuth;
+    const checks: [AuthorizationRequest["action"], ResourceRef][] = [
+      ["create", { kind: "agent", namespaceId, id: namespaceId }],
+      ["create", { kind: "configuration", namespaceId, id: namespaceId }],
+      ["administer", { kind: "installation", id: this.installation.id }],
+      ...(record.agentId === undefined
+        ? []
+        : (["read", "operate", "deploy"] as const).map(
+            (action): [AuthorizationRequest["action"], ResourceRef] => [
+              action,
+              { kind: "agent", namespaceId, id: record.agentId as string },
+            ],
+          )),
+      ...(record.configurationId === undefined
+        ? []
+        : (["read", "update"] as const).map(
+            (action): [AuthorizationRequest["action"], ResourceRef] => [
+              action,
+              { kind: "configuration", namespaceId, id: record.configurationId as string },
+            ],
+          )),
+      ...Object.values(plan.configuration.secretBindings ?? {}).map(
+        (binding): [AuthorizationRequest["action"], ResourceRef] => ["operate", binding.source],
+      ),
+      ...(harnessAuth?.method === "api_key" ||
+      harnessAuth?.method === "codex_pat" ||
+      harnessAuth?.method === "oauth"
+        ? [["operate", harnessAuth.source] as [AuthorizationRequest["action"], ResourceRef]]
+        : []),
+      ...(harnessAuth?.method === "chatgpt_service_account"
+        ? [
+            [
+              "read",
+              { kind: "service_account", namespaceId, id: harnessAuth.serviceAccountId },
+            ] as [AuthorizationRequest["action"], ResourceRef],
+          ]
+        : []),
+    ];
+    for (const [action, resource] of checks) {
+      if (!(await this.authorizationDecision(principalId, action, resource)).decision.allowed) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private authorizationAuthority(principalId: string): IAMDriver {

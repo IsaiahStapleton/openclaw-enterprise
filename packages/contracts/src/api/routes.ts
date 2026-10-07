@@ -82,6 +82,7 @@ import {
   BackendListResponse,
   ObservabilityResponse,
   RepositoryOptionListResponse,
+  SecretDetailResponse,
   SecretListResponse,
   CredentialSourceListResponse,
   CredentialWithdrawalResponse,
@@ -727,12 +728,12 @@ export const occApiRoutes = [
     iamAction: "read",
     resourceKind: "secret",
     authorizationTarget: "secret",
-    summary: "Get exact Namespace-owned Secret metadata without revealing material",
+    summary: "Get exact Namespace-owned Secret metadata and its readable consumers",
     tags: ["Secrets"],
     schema: {
       querystring: EmptyQuery,
       params: SecretParams,
-      response: { 200: SecretResponseRef, ...readErrors },
+      response: { 200: SecretDetailResponse, ...readErrors },
     },
   },
   {

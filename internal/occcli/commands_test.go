@@ -129,6 +129,36 @@ func TestSecretListShowsNamespaceSecrets(t *testing.T) {
 	}
 }
 
+func TestSecretGetTableNamesConsumersAndCountsUnreadableOnes(t *testing.T) {
+	const secretID = "sec_55555555-5555-4555-8555-555555555555"
+	const configurationID = "cfg_77777777-7777-4777-8777-777777777777"
+	secret := `{"id":"` + secretID + `","name":"model-key","namespaceId":"` + testNamespaceID + `","ref":{},` +
+		`"consumers":{"agents":["` + testAgentID + `"],"configurations":["` + configurationID + `"],` +
+		`"credentialSources":[],"provisioningRequests":[],"unreadable":2,"truncated":true}}`
+	out, _, err := runOCC(t, map[string]string{
+		"GET /namespaces/" + testNamespaceID + "/secrets/" + secretID: secret,
+	}, "--namespace", testNamespaceID, "secret", "get", secretID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "agent:" + testAgentID + ", configuration:" + configurationID + ", 2 unreadable, more"
+	if !strings.Contains(out, "CONSUMERS") || !strings.Contains(out, want) {
+		t.Fatalf("expected the consumers column %q:\n%s", want, out)
+	}
+
+	unused := `{"id":"` + secretID + `","name":"model-key","namespaceId":"` + testNamespaceID + `","ref":{},` +
+		`"consumers":{"agents":[],"configurations":[],"credentialSources":[],"provisioningRequests":[],"unreadable":0,"truncated":false}}`
+	out, _, err = runOCC(t, map[string]string{
+		"GET /namespaces/" + testNamespaceID + "/secrets/" + secretID: unused,
+	}, "--namespace", testNamespaceID, "secret", "get", secretID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row := strings.Fields(strings.Split(out, "\n")[1]); len(row) != 3 || row[2] != "-" {
+		t.Fatalf("an unreferenced Secret must show no consumers:\n%s", out)
+	}
+}
+
 func TestPresetCommandsListShowAndDeleteNamespacePresets(t *testing.T) {
 	const presetID = "pre_66666666-6666-4666-8666-666666666666"
 	collection := "/namespaces/" + testNamespaceID + "/presets"

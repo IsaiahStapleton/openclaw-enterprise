@@ -277,9 +277,32 @@ export interface PresetRepository extends PresetReadRepository {
   deletePreset(namespaceId: string, presetId: string): Promise<boolean>;
 }
 
+/**
+ * The current platform state that keeps a Secret from deletion. An Agent appears once,
+ * whether its draft, active revision, or a pending deployment holds the reference.
+ */
+export type SecretReferenceKind =
+  "agent" | "configuration" | "credential_source" | "provisioning_request";
+
+export interface SecretReferenceEntry {
+  readonly kind: SecretReferenceKind;
+  readonly id: string;
+}
+
+/** At most `limit` references, ordered by kind then ID; `truncated` when more exist. */
+export interface SecretReferencePage {
+  readonly references: readonly Readonly<SecretReferenceEntry>[];
+  readonly truncated: boolean;
+}
+
 export interface SecretReadRepository {
   findSecret(namespaceId: string, secretId: string): Promise<Readonly<Secret> | undefined>;
   listSecrets(namespaceId: string): Promise<readonly Readonly<Secret>[]>;
+  listReferences(
+    namespaceId: string,
+    secretId: string,
+    limit: number,
+  ): Promise<Readonly<SecretReferencePage>>;
 }
 
 export interface SecretRepository extends SecretReadRepository {
@@ -972,7 +995,7 @@ function secretBindingsReference(
 }
 
 async function assertSecretBindingsAvailable(
-  secrets: SecretReadRepository,
+  secrets: Pick<SecretReadRepository, "findSecret">,
   namespaceId: string,
   bindings: SecretBindings | undefined,
 ): Promise<void> {
@@ -1398,12 +1421,6 @@ function repositories(
             const secret = snapshot.secrets.get(agentKey(namespaceId, secretId));
             return secret === undefined ? undefined : immutableCopy(secret);
           },
-          listSecrets: async (namespaceId) =>
-            Object.freeze(
-              Array.from(snapshot.secrets.values())
-                .filter((secret) => secret.namespaceId === namespaceId)
-                .map((secret) => immutableCopy(secret)),
-            ),
         },
         configuration.namespaceId,
         secretBindings,
@@ -1516,49 +1533,72 @@ function repositories(
       snapshot.secrets.set(key, saved);
       return immutableCopy(saved);
     },
-    hasReferences: async (namespaceId, secretId) => {
+    listReferences: async (namespaceId, secretId, limit) => {
       if ((await secrets.findSecret(namespaceId, secretId)) === undefined) {
-        return false;
+        return Object.freeze({ references: Object.freeze([]), truncated: false });
       }
-      return (
-        Array.from(snapshot.configurations.values()).some(
-          (configuration) =>
-            configuration.namespaceId === namespaceId &&
-            secretBindingsReference(configuration.secretBindings, namespaceId, secretId),
-        ) ||
-        Array.from(snapshot.credentialSources.values()).some(
-          (source) =>
-            source.namespaceId === namespaceId &&
-            Object.values(source.secrets).some((reference) => reference.id === secretId),
-        ) ||
-        Array.from(snapshot.agents.values()).some((agent) => {
-          const activeRevision = (
-            snapshot.revisions.get(agentKey(namespaceId, agent.id)) ?? []
-          ).find((revision) => revision.id === agent.activeRevisionId);
-          return (
-            agent.namespaceId === namespaceId &&
-            (harnessSecretReference(agent.harnessAuth, namespaceId, secretId) ||
-              harnessSecretReference(activeRevision?.harnessAuth, namespaceId, secretId) ||
-              secretBindingsReference(activeRevision?.secretBindings, namespaceId, secretId))
+      const found = new Map<string, Readonly<SecretReferenceEntry>>();
+      const add = (kind: SecretReferenceKind, id: string): void => {
+        found.set(`${kind}\u0000${id}`, Object.freeze({ kind, id }));
+      };
+      for (const configuration of snapshot.configurations.values()) {
+        if (
+          configuration.namespaceId === namespaceId &&
+          secretBindingsReference(configuration.secretBindings, namespaceId, secretId)
+        ) {
+          add("configuration", configuration.id);
+        }
+      }
+      for (const source of snapshot.credentialSources.values()) {
+        if (
+          source.namespaceId === namespaceId &&
+          Object.values(source.secrets).some((reference) => reference.id === secretId)
+        ) {
+          add("credential_source", source.id);
+        }
+      }
+      for (const agent of snapshot.agents.values()) {
+        const activeRevision = (snapshot.revisions.get(agentKey(namespaceId, agent.id)) ?? []).find(
+          (revision) => revision.id === agent.activeRevisionId,
+        );
+        if (
+          agent.namespaceId === namespaceId &&
+          (harnessSecretReference(agent.harnessAuth, namespaceId, secretId) ||
+            harnessSecretReference(activeRevision?.harnessAuth, namespaceId, secretId) ||
+            secretBindingsReference(activeRevision?.secretBindings, namespaceId, secretId))
+        ) {
+          add("agent", agent.id);
+        }
+      }
+      for (const operation of snapshot.operations) {
+        if (operation.kind !== "agent_revision" || operation.namespaceId !== namespaceId) {
+          continue;
+        }
+        const revision = Array.from(snapshot.revisions.values())
+          .flat()
+          .find(
+            (candidate) =>
+              candidate.namespaceId === namespaceId && candidate.id === operation.resourceId,
           );
-        }) ||
-        snapshot.operations.some((operation) => {
-          if (operation.kind !== "agent_revision" || operation.namespaceId !== namespaceId) {
-            return false;
-          }
-          const revision = Array.from(snapshot.revisions.values())
-            .flat()
-            .find(
-              (candidate) =>
-                candidate.namespaceId === namespaceId && candidate.id === operation.resourceId,
-            );
-          return (
-            secretBindingsReference(revision?.secretBindings, namespaceId, secretId) ||
-            harnessSecretReference(revision?.harnessAuth, namespaceId, secretId)
-          );
-        })
-      );
+        if (
+          revision !== undefined &&
+          (secretBindingsReference(revision.secretBindings, namespaceId, secretId) ||
+            harnessSecretReference(revision.harnessAuth, namespaceId, secretId))
+        ) {
+          add("agent", revision.agentId);
+        }
+      }
+      // Kind, then ID, in code-unit order, as PostgreSQL's COLLATE "C" sorts them.
+      const ordered = Array.from(found.keys())
+        .sort()
+        .map((key) => found.get(key) as Readonly<SecretReferenceEntry>);
+      return Object.freeze({
+        references: Object.freeze(ordered.slice(0, limit)),
+        truncated: ordered.length > limit,
+      });
     },
+    hasReferences: async (namespaceId, secretId) =>
+      (await secrets.listReferences(namespaceId, secretId, 1)).references.length > 0,
     deleteSecret: async (namespaceId, secretId) => {
       if ((await secrets.findSecret(namespaceId, secretId)) === undefined) {
         return false;
