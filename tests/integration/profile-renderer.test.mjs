@@ -665,6 +665,44 @@ test("preflight rejects metrics and native admin inputs that Helm would reject",
     }),
     /controlPlane.authBaseUrl must use HTTPS with native admin/,
   );
+
+  // The API and the bootstrap Job accept only an absolute HTTP(S) origin.
+  for (const authBaseUrl of [
+    "https://console.oce.example.internal/occ",
+    "https://console.oce.example.internal?next=1",
+    "https://console.oce.example.internal#console",
+    "https://admin@console.oce.example.internal",
+    "ftp://console.oce.example.internal",
+    "console.oce.example.internal",
+    // Stricter than the API, like the chart: URL parsing repairs these into an origin.
+    "https:console.oce.example.internal",
+    "https://console.oce.example.internal/.",
+    "https://console.oce.example.internal/%2e",
+  ]) {
+    assertPreflightFailure(
+      "codex",
+      codexInput({ controlPlane: { ...baseInput().controlPlane, authBaseUrl } }),
+      /controlPlane.authBaseUrl must be an absolute HTTP\(S\) origin URL without a path, query, fragment, or user info/,
+    );
+  }
+  // An unparsable value is reported once, not again by the native admin checks.
+  const error = renderError(() =>
+    render(
+      "codex",
+      codexInput({
+        controlPlane: { ...baseInput().controlPlane, authBaseUrl: "console.oce.example.internal" },
+      }),
+    ),
+  );
+  const preflight = JSON.parse(
+    readFileSync(join(error.profileRendererDirectory, "preflight.json"), "utf8"),
+  );
+  assert.deepEqual(
+    preflight.errors.filter((message) => message.includes("authBaseUrl")),
+    [
+      "controlPlane.authBaseUrl must be an absolute HTTP(S) origin URL without a path, query, fragment, or user info.",
+    ],
+  );
 });
 
 test("profiles pass an optional observability URL to Installation startup YAML", async () => {

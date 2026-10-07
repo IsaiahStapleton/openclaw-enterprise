@@ -1102,3 +1102,111 @@ test("the chart refuses native admin base URLs the API refuses at startup", tool
     );
   }
 });
+
+// The API refuses an auth base URL that is not an absolute HTTP(S) origin: server.mjs parses
+// OCC_AUTH_BASE_URL, and createControllerAuth (validHttpBaseURL, which the bootstrap Job also
+// runs before it) refuses the rest, both as AUTH_BASE_URL_INVALID. The chart refuses the same
+// values at render time and still renders every origin the API accepts. Native admin is off,
+// so only the origin check applies.
+test(
+  "the chart refuses auth base URLs that are not origins, as the API does at startup",
+  tooling,
+  async (t) => {
+    const directory = await startupDirectory(t);
+    const values = { "agentNativeAdmin.enabled": "false" };
+    const environment = resolveSecrets(
+      signInSettings(deploymentEnv(await renderChart(values), "api")),
+    );
+    // server.mjs's normalization, then createControllerAuth. Without an Installation, accepted
+    // settings stop right after its base URL checks.
+    const apiAccepts = (baseUrl) => {
+      let normalized;
+      try {
+        normalized = new URL(baseUrl).toString().replace(/\/$/, "");
+      } catch {
+        return false;
+      }
+      try {
+        createControllerAuth({ mode: "production", secret: "s".repeat(32), baseURL: normalized });
+      } catch (error) {
+        if (/Better Auth issuer requires an Installation/.test(error.message)) {
+          return true;
+        }
+        assert.match(error.message, /^OCC_AUTH_BASE_URL must be an absolute HTTP origin URL\.$/);
+        return false;
+      }
+      assert.fail(`createControllerAuth accepted ${baseUrl} without an Installation`);
+    };
+    const cases = [
+      ...[
+        "https://console.oce.example.internal/occ",
+        "https://console.oce.example.internal/occ/",
+        "https://console.oce.example.internal?next=1",
+        "https://console.oce.example.internal/?next=1",
+        "https://console.oce.example.internal#console",
+        "https://admin@console.oce.example.internal",
+        "https://admin:secret@console.oce.example.internal",
+        "https://:secret@console.oce.example.internal",
+        "console.oce.example.internal",
+        "//console.oce.example.internal",
+        "ftp://console.oce.example.internal",
+        "https://console.oce.example.internal:65536",
+        "https://",
+      ].map((baseUrl) => ({ baseUrl, renders: false, accepted: false })),
+      ...[
+        "https://console.oce.example.internal",
+        "https://console.oce.example.internal/",
+        "https://console.oce.example.internal:8443",
+        "https://console.oce.example.internal:0443/",
+        "https://console.oce.example.internal:65535",
+        "HTTPS://Console.OCE.example.internal",
+        "https://console.oce.example.internal.",
+        " https://console.oce.example.internal ",
+        "https://console.oce.example.internal?",
+        "https://console.oce.example.internal#",
+        "https://192.0.2.10",
+        "https://[2001:db8::10]:8443",
+        "http://console.oce.example.internal",
+      ].map((baseUrl) => ({ baseUrl, renders: true, accepted: true })),
+      // Deliberately stricter: Node repairs these degenerate spellings into an origin.
+      ...[
+        "https:console.oce.example.internal",
+        "https://console.oce.example.internal/.",
+        "https://console.oce.example.internal/%2e",
+      ].map((baseUrl) => ({ baseUrl, renders: false, accepted: true })),
+    ];
+    await eachBounded(cases, async ({ baseUrl, renders, accepted }) => {
+      const label = JSON.stringify(baseUrl);
+      assert.equal(apiAccepts(baseUrl), accepted, label);
+      if (!renders) {
+        assert.match(
+          await chartRefusal({ ...values, "auth.baseUrl": baseUrl }),
+          /auth\.baseUrl must be an absolute HTTP\(S\) origin/,
+          label,
+        );
+        return;
+      }
+      const objects = await renderChart({ ...values, "auth.baseUrl": baseUrl });
+      assert.ok(
+        deploymentEnv(objects, "api").some(
+          ({ name, value }) => name === "OCC_AUTH_BASE_URL" && value === baseUrl,
+        ),
+        label,
+      );
+      // The real entrypoint gets past configuration with the rendered value.
+      assert.equal(
+        await startupCode(directory, { ...environment, OCC_AUTH_BASE_URL: baseUrl }),
+        "PERSISTENCE_UNAVAILABLE",
+        label,
+      );
+    });
+    // The entrypoint's own code for a value it cannot parse.
+    assert.equal(
+      await startupCode(directory, {
+        ...environment,
+        OCC_AUTH_BASE_URL: "console.oce.example.internal",
+      }),
+      "AUTH_BASE_URL_INVALID",
+    );
+  },
+);
