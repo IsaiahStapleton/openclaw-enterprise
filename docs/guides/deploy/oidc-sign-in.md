@@ -191,10 +191,11 @@ afterwards. To add someone who should sign in only through the IdP, follow
 - The API reads the JWKS on every callback, so IdP key rotation needs no restart.
 - OCE does not learn when the IdP disables someone: that person's OCE sessions continue
   until they expire (at most 8 hours). Offboarding also means disabling the account in
-  OCE or detaching its OIDC method, which ends its sessions. Neither ends a
-  [service key](../../reference/authentication/service-api-keys.md#revoke-or-rotate-a-service-key)
+  OCE or detaching its OIDC method; either ends all of the account's sessions. Neither
+  ends a [service key](../../reference/authentication/service-api-keys.md#revoke-or-rotate-a-service-key)
   the person uses from the CLI: revoke it, or delete its service principal's
-  AccessBindings. Sign-out is local; while the IdP session lives, one click signs in again.
+  AccessBindings.
+- Sign-out is local: while the IdP session lives, one click signs in again.
 - An IdP outage, blocked egress or a rejected ID token fails that sign-in closed and
   returns the browser to `/console/?authError=oidc`; the recovery account's password
   still signs in. OIDC shares the external sign-in budgets with GitHub and Google.
