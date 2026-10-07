@@ -64,9 +64,11 @@ function reject(socket, statusCode, message) {
 }
 
 // Closes a client socket now. If bytes are still queued for it, reset the connection instead
-// of sending a FIN, so the client cannot take a cut reply as whole.
+// of sending a FIN, so the client cannot take a cut reply as whole. With nothing queued, every
+// byte is already with the kernel (a shutdown may still be in flight, when a reset would fail
+// and leak the handle), so a plain close is right.
 function cutClient(socket) {
-  if (!socket.writableFinished) {
+  if (socket.writableLength > 0) {
     socket.resetAndDestroy();
     return;
   }
@@ -129,8 +131,10 @@ export function createSlackProxyServer({ clientDrainTimeoutMs = CLIENT_DRAIN_TIM
     upstream.once("timeout", () => upstream.destroy(new Error("upstream connection timeout")));
     upstream.once("error", () => {
       if (connected) {
-        // The reply is cut: reset, so the client cannot take it as whole.
-        if (!clientSocket.destroyed) {
+        // Before the upstream's EOF, the reply is cut: reset, so the client cannot take it as
+        // whole. After it (a client byte piped into the ended upstream, say), the reply is
+        // complete and the close handler lets the client drain it.
+        if (!clientSocket.destroyed && !clientSocket.writableEnded) {
           clientSocket.resetAndDestroy();
         }
         return;

@@ -244,6 +244,43 @@ test(
 );
 
 test(
+  "a client byte after the upstream's EOF does not cut the complete reply",
+  testOptions,
+  async (t) => {
+    const reply = randomBytes(1_024);
+    const upstream = await listen(t, (socket) => {
+      socket.on("error", () => {});
+      socket.end(reply);
+    });
+    const tunnel = heldClientTunnel(t, upstream.address().port);
+    // The client sends a byte just as the upstream's EOF has ended the proxy's upstream socket,
+    // so piping it upstream fails (EPIPE) after the whole reply has arrived.
+    const upstreamErrors = [];
+    tunnel.upstreamSocket().once("error", (error) => upstreamErrors.push(error.code));
+    tunnel.upstreamSocket().once("finish", () => tunnel.client.push("late-client-byte"));
+
+    await bound(
+      new Promise((resolve) => tunnel.upstreamSocket().once("close", resolve)),
+      "upstream close",
+    );
+    await nextTurn();
+    assert.deepEqual(upstreamErrors, ["EPIPE"], "the late byte failed upstream");
+    assert.equal(tunnel.client.destroyed, false, "the proxy keeps a client that is still reading");
+
+    while (tunnel.held.length > 0) {
+      tunnel.held.shift()();
+      await nextTurn();
+    }
+    assert.ok(tunnel.finished(), "the client saw a clean EOF");
+    const body = tunnel.bytes().subarray(tunnel.bytes().indexOf("\r\n\r\n") + 4);
+    assert.ok(body.equals(reply), "the client received the whole reply");
+    tunnel.client.push(null);
+    await bound(tunnel.closed, "client close");
+    assert.equal(tunnel.reset(), false, "a complete reply gets a clean close");
+  },
+);
+
+test(
   "a client that never reads its queued bytes is reset after the drain timeout",
   testOptions,
   async (t) => {

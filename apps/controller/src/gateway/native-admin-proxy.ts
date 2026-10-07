@@ -416,9 +416,11 @@ async function boundedLease(
 
 // Closes the browser socket now. If bytes are still queued for it, reset the connection
 // instead of sending a FIN where the socket allows it (a TLS socket does not), so a cut stream
-// does not look like a clean close.
+// does not look like a clean close. With nothing queued, every byte is already with the kernel
+// (a shutdown may still be in flight, when a reset would fail and leak the handle), so a plain
+// close is right.
 function cutClient(socket: Socket): void {
-  if (!socket.writableFinished) {
+  if (socket.writableLength > 0) {
     try {
       socket.resetAndDestroy();
       return;
@@ -441,7 +443,7 @@ function closeClientWhenDrained(socket: Socket, drainTimeoutMs: number): void {
     return;
   }
   if (!socket.writableEnded) {
-    socket.destroy();
+    cutClient(socket);
     return;
   }
   socket.resume();
