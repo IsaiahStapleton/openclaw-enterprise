@@ -2624,6 +2624,11 @@ test(
         /invalid IPv6 address/,
       ],
       [
+        "a trusted proxy with a dotted tail before compression",
+        { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": "1.2.3.4::/96" },
+        /invalid IPv6 address/,
+      ],
+      [
         "an IPv4-mapped trusted proxy with an IPv6 prefix",
         { ...trustedProxyValues, "api.trustedProxy.cidrs[0]": "::ffff:192.0.2.1/128" },
         /prefix must be 1 through 32/,

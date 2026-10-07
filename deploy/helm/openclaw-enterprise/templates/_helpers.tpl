@@ -133,30 +133,14 @@ an allowlist without its provider is refused: the API treats it as a startup err
 {{- else if regexMatch "^[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*/([1-9]|[1-9][0-9]|1[01][0-9]|12[0-8])$" $value -}}
 {{- $addr := first (splitList "/" $value) -}}
 {{- $prefix := int (last (splitList "/" $value)) -}}
-{{- $pieces := splitList "::" $addr -}}
-{{- if gt (len $pieces) 2 -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv6 address" -}}{{- end -}}
-{{- $bag := dict "tokens" (list) -}}
-{{- range $piece := $pieces -}}
-{{- if $piece -}}
-{{- $_ := set $bag "tokens" (concat (index $bag "tokens") (splitList ":" $piece)) -}}
-{{- end -}}
-{{- end -}}
-{{- $tokens := index $bag "tokens" -}}
-{{- $count := len $tokens -}}
-{{- range $index, $token := $tokens -}}
-{{- if not $token -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv6 address" -}}{{- end -}}
-{{- if contains "." $token -}}
-{{- if or (ne (add $index 1) $count) (not (regexMatch "^(?:0|[1-9][0-9]{0,2})(?:\\.(?:0|[1-9][0-9]{0,2})){3}$" $token)) -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv6 address" -}}{{- end -}}
-{{- range $octet := splitList "." $token -}}
+{{- /* A dotted tail has to end the address. Replacing it with 0:0 leaves one hex grammar: at most one ::, then fewer than 8 groups, or exactly 8 without it. */ -}}
+{{- $tail := regexFind ":(?:0|[1-9][0-9]{0,2})(?:\\.(?:0|[1-9][0-9]{0,2})){3}$" $addr -}}
+{{- range $octet := splitList "." (default ":0.0.0.0" $tail | trimPrefix ":") -}}
 {{- if gt (int $octet) 255 -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv6 address" -}}{{- end -}}
 {{- end -}}
-{{- else if not (regexMatch "^[0-9A-Fa-f]{1,4}$" $token) -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv6 address" -}}{{- end -}}
-{{- end -}}
-{{- $slots := $count -}}
-{{- if and (gt $count 0) (contains "." (last $tokens)) -}}{{- $slots = add $count 1 -}}{{- end -}}
-{{- if gt (len $pieces) 1 -}}
-{{- if ge $slots 8 -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv6 address" -}}{{- end -}}
-{{- else if ne $slots 8 -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv6 address" -}}{{- end -}}
+{{- $hex := ternary (printf "%s:0:0" (trimSuffix $tail $addr)) $addr (ne $tail "") -}}
+{{- $groups := len (regexFindAll "[0-9A-Fa-f]+" $hex -1) -}}
+{{- if or (not (regexMatch "^(?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4})*)?(?:::(?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4})*)?)?$" $hex)) (ternary (gt $groups 7) (ne $groups 8) (contains "::" $hex)) -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv6 address" -}}{{- end -}}
 {{- if and (regexMatch "^(?i)::ffff:(?:0|[1-9][0-9]{0,2})(?:\\.(?:0|[1-9][0-9]{0,2})){3}$" $addr) (gt $prefix 32) -}}{{- fail "api.trustedProxy.cidrs contains an IPv4-mapped address, whose prefix must be 1 through 32" -}}{{- end -}}
 {{- else -}}
 {{- fail "api.trustedProxy.cidrs requires IPv4 or IPv6 CIDRs with a nonzero prefix" -}}
