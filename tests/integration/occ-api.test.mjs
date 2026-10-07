@@ -1166,7 +1166,7 @@ test("Namespace IAM refuses bindings whose Role cannot apply to the target", asy
     );
     return id;
   };
-  const creator = await storedRole("role-stored-creator", [
+  const creator = await storedRole(`role_${randomUUID()}`, [
     { action: "read", resourceKind: "namespace" },
     { action: "create", resourceKind: "agent" },
     { action: "create", resourceKind: "configuration" },
@@ -1182,7 +1182,7 @@ test("Namespace IAM refuses bindings whose Role cannot apply to the target", asy
     assert.deepEqual(rejected.body.error.details, [{ path: "/roleId", code: "INVALID_VALUE" }]);
     assert.match(
       rejected.body.error.message,
-      /^Role role-stored-creator has Permissions this API cannot bind: agent:create, configuration:create, secret:create\. Create is checked on the Namespace, and this API binds only exact resources; bind a Role without them\.$/,
+      /^Role role_\S+ has Permissions this API cannot bind: agent:create, configuration:create, secret:create\. Create is checked on the Namespace, and this API binds only exact resources; bind a Role without them\.$/,
     );
   }
 

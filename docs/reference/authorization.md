@@ -150,8 +150,9 @@ A Role groups Permissions:
 }
 ```
 
-This example illustrates an internal policy record. Role creation takes only
-`name` and `permissions`; OCC supplies its ID and Namespace.
+This example illustrates an internal policy record, which can hold `create`
+because it is not written through the Namespace policy API. Role creation takes
+only `name` and `permissions`; OCC supplies its ID and Namespace.
 
 ## Access bindings and Groups
 
