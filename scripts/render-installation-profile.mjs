@@ -217,10 +217,12 @@ function stripUrlEdges(value) {
 // characters: the host parser refuses spaces, and drops tabs and most invisible characters.
 // (URL parsing below refuses < and >, which the chart refuses explicitly.) Node's Unicode
 // tables can be newer than Helm's, so a letter assigned since then passes here and fails in
-// the chart; no realistic host uses one.
+// the chart; no realistic host uses one. Like both, it refuses a bare ? or # (https://host?),
+// which parses to an empty query or fragment but would break the API's auth routes.
 function httpOrigin(value) {
   const stripped = stripUrlEdges(value);
   if (
+    /[?#]/.test(stripped) ||
     /^[^\p{L}\p{M}\p{N}\p{P}\p{S}]|[^\p{L}\p{M}\p{N}\p{P}\p{S}]$/u.test(stripped) ||
     /[^\p{L}\p{M}\p{N}\p{P}\p{S}\u200c\u200d]/u.test(stripped) ||
     !/^https?:\/\/[^/?#]*\/?(?:[?#].*)?$/i.test(stripped)
