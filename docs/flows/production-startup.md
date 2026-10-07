@@ -1,7 +1,7 @@
 ---
 created: 2026-08-25
-updated: "2026-10-01"
-last_updated_session: "authoring-run/e288dbbe-6d08-4251-adaa-860443c31b44"
+updated: "2026-10-05"
+last_updated_session: "01a0f9e4-a0bf-76f1-acdb-e6b55ada490a"
 ---
 
 # Production Startup Flow
@@ -99,13 +99,13 @@ images from Helm values or rewrite Driver configuration.
 
 `scripts/prepare-bootstrap-volume:124`
 
-Before the first install, the operator creates the bootstrap PVC named by
-`bootstrap.password.claimName` and runs the helper with explicit kubeconfig,
-context, namespace, claim, approved Node-capable image, and optional repeated
-`--node-selector KEY=VALUE` labels. The helper launches a bounded preparation
-Pod, applies the selectors before WaitForFirstConsumer storage binds, verifies
-the mounted root is fresh except for filesystem-owned `lost+found`, sets UID/GID
-`1000` with mode `0700`, and refuses to continue on any other entry.
+Before the first install, the operator creates the `bootstrap.password.claimName`
+PVC and runs the helper with explicit kubeconfig, context, namespace, claim,
+approved Node-capable image, and optional `--node-selector KEY=VALUE` labels.
+The preparation Pod preserves string namespaces and selector keys, applying selectors
+before WaitForFirstConsumer binding. The helper requires a fresh
+root except for filesystem-owned `lost+found`, sets UID/GID `1000` with mode
+`0700`, and refuses other entries.
 
 If cluster policy forbids the helper Pod, storage administration owns the same
 state transition through an approved storage workflow. A preprepared claim goes
@@ -322,6 +322,8 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-05 06:59: Preserve bootstrap Pod namespace strings. (01a0f9e4-a0bf-76f1-acdb-e6b55ada490a - 66a4a07028fd0a08c29ea80e8f95cadc48a74932)
 
 - 2026-10-05: Name Preset file failures `PRESET_FILE_INVALID`.
 - 2026-10-04: Poll the startup probe every second.
