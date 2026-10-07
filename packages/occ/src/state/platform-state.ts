@@ -2790,6 +2790,113 @@ function repositories(
   };
 }
 
+/**
+ * The memory counterpart of `occ.finalize_agent_deletion` (migrations/0035), applied to the
+ * records this adapter keeps. Returns false unless the Agent's deletion was admitted: it is
+ * `deleting`, stopped, and its `deleted` lifecycle work is recorded.
+ */
+function finalizeAgentDeletion(
+  snapshot: PlatformSnapshot,
+  namespaceId: string,
+  agentId: string,
+): boolean {
+  const work = snapshot.operations.find(
+    (operation) =>
+      operation.kind === "agent" &&
+      operation.target === "deleted" &&
+      operation.namespaceId === namespaceId &&
+      operation.resourceId === agentId,
+  );
+  const key = agentKey(namespaceId, agentId);
+  const agent = snapshot.agents.get(key);
+  if (
+    work === undefined ||
+    snapshot.namespaces.get(namespaceId) === undefined ||
+    agent === undefined ||
+    agent.status !== "deleting" ||
+    agent.desiredRuntimeState !== "stopped"
+  ) {
+    return false;
+  }
+  assertInitialized(snapshot);
+  const revisionIds = new Set((snapshot.revisions.get(key) ?? []).map((revision) => revision.id));
+
+  // Attempts outlive their revision as evidence. Only a disposed attempt may drop its live
+  // revision (repository_session_attempts_live_revision_valid), so live sessions refuse.
+  for (const [admissionId, attempt] of snapshot.repositorySessions) {
+    if (
+      attempt.namespaceId !== namespaceId ||
+      attempt.agentId !== agentId ||
+      attempt.liveRevisionId === null
+    ) {
+      continue;
+    }
+    if (attempt.phase !== "disposed") {
+      throw new ResourceStateConflictError(
+        "The deleting Agent still has an undisposed repository session.",
+      );
+    }
+    snapshot.repositorySessions.set(
+      admissionId,
+      immutableCopy({ ...attempt, liveRevisionId: null }),
+    );
+  }
+
+  // The finalizer's three AccessBinding groups: the Agent's ServicePrincipal as subject, the
+  // Agent as target, and the Agent's AgentRevisions as target. Like the SQL, the first two are
+  // not Namespace-scoped. Restrictions live in the IAM driver's seed here, not in this state.
+  for (const [bindingKey, binding] of snapshot.bindings) {
+    if (
+      (binding.subjectKind === "identity" && binding.subjectId === agent.servicePrincipalId) ||
+      (binding.resourceKind === "agent" && binding.resourceId === agentId) ||
+      (binding.resourceKind === "agent_revision" &&
+        binding.resourceId !== undefined &&
+        revisionIds.has(binding.resourceId))
+    ) {
+      snapshot.bindings.delete(bindingKey);
+    }
+  }
+
+  // Withdrawals cascade with their revision, and the setup with its Agent.
+  for (const [withdrawalKey, withdrawal] of snapshot.credentialWithdrawals) {
+    if (withdrawal.namespaceId === namespaceId && revisionIds.has(withdrawal.revisionId)) {
+      snapshot.credentialWithdrawals.delete(withdrawalKey);
+    }
+  }
+  snapshot.workspaceSetups.delete(key);
+  snapshot.revisions.delete(key);
+  snapshot.agents.delete(key);
+
+  snapshot.audit.push(
+    immutableCopy({
+      id: `aud_${crypto.randomUUID()}`,
+      installationId: snapshot.installation!.id,
+      namespaceId,
+      occurredAt: new Date().toISOString(),
+      kind: "mutation" as const,
+      actorId: work.actorId,
+      source: "occ" as const,
+      action: "openclaw.agents.lifecycle.delete",
+      resource: { kind: "agent" as const, id: agentId, namespaceId },
+      outcome: "success" as const,
+      // Memory work is never claimed or retried, so its completion is the first attempt.
+      details: { reasonCode: "AGENT_DELETED", attemptCount: 1 },
+    }),
+  );
+
+  // The Agent's own lifecycle work and its revisions' work end with it.
+  const remaining = snapshot.operations.filter(
+    (operation) =>
+      operation.namespaceId !== namespaceId ||
+      !(
+        (operation.kind === "agent" && operation.resourceId === agentId) ||
+        (operation.kind === "agent_revision" && revisionIds.has(operation.resourceId))
+      ),
+  );
+  snapshot.operations.splice(0, snapshot.operations.length, ...remaining);
+  return true;
+}
+
 /** Process-local, single-writer state. No restart or multi-process durability. */
 export class InMemoryPlatformState implements PlatformStateStore {
   private snapshot: PlatformSnapshot = {
@@ -2844,6 +2951,25 @@ export class InMemoryPlatformState implements PlatformStateStore {
   }
 
   async transact<T>(work: (state: PlatformUnitOfWork) => Promise<T>): Promise<T> {
+    return this.commit((working, lifetime) =>
+      work(bindPlatformUnitOfWork(repositories(working, this.iamSubjects), lifetime)),
+    );
+  }
+
+  /**
+   * Completes an admitted Agent deletion the way the PostgreSQL worker's finalizer does
+   * (`PostgresWorkQueue.completeAgentDeletion`). Memory records lifecycle work but never
+   * executes it, so dev and test callers complete it here. Removes the Agent, its
+   * AgentRevisions and every AccessBinding the deletion audit listed, and records the
+   * `openclaw.agents.lifecycle.delete` success. Returns false when no deletion was admitted.
+   */
+  async completeAgentDeletion(namespaceId: string, agentId: string): Promise<boolean> {
+    return this.commit(async (working) => finalizeAgentDeletion(working, namespaceId, agentId));
+  }
+
+  private async commit<T>(
+    work: (working: PlatformSnapshot, lifetime: RepositoryTransactionLifetime) => Promise<T>,
+  ): Promise<T> {
     const previous = this.pending;
     let release: (() => void) | undefined;
     this.pending = new Promise<void>((resolve) => {
@@ -2854,9 +2980,7 @@ export class InMemoryPlatformState implements PlatformStateStore {
       await previous;
       const working = cloneSnapshot(this.snapshot);
       const committedAuditCount = working.audit.length;
-      const result = await work(
-        bindPlatformUnitOfWork(repositories(working, this.iamSubjects), lifetime),
-      );
+      const result = await work(working, lifetime);
       await lifetime.finish();
       await this.publishAudit(working.audit.slice(committedAuditCount));
       this.snapshot = working;
