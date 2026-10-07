@@ -263,11 +263,12 @@ The [image upgrade command](../guides/deploy/production-upgrade.md) upgrades onl
 the control-plane `openclaw-enterprise` release. Releases after 2026-09-28
 also need newer `openclaw-execution` grants: Pod `patch` for the tenant worker
 role, and Pod, `pods/proxy`, `pods/log` and Event reads for the tenant API role.
-Without them, workspace node updates to running Harness and Gateway Pods fail
-with a Kubernetes `403`, and log reads return `503 RUNTIME_LOGS_CLUSTER_RBAC`.
+Without them, workspace node setup patches to running Harness Pods fail with a
+Kubernetes `403`, failing that reconciliation, and log reads return
+`503 RUNTIME_LOGS_CLUSTER_RBAC`.
 
-Upgrade the execution release first, from the candidate checkout and with the
-values it was installed with, while the old controller still runs:
+Upgrade the execution release first, from the candidate checkout, while the old
+controller still runs:
 
 ```bash
 helm upgrade <execution-release> deploy/helm/openclaw-execution \
@@ -275,6 +276,9 @@ helm upgrade <execution-release> deploy/helm/openclaw-execution \
   -f <execution-values.yaml>
 ```
 
-The new chart only widens grants and DNS egress, so the old controller keeps
-working, and existing tenant RoleBindings to its roles receive the new rules. Keep `agentRuntimeLogs.enabled`
-equal to the control-plane chart's value. Then run the image upgrade command.
+Pass the install's values file or `--set` flags. Do not use `--reuse-values`:
+it keeps the old chart's defaults and drops the new `agentRuntimeLogs` value.
+Keep `agentRuntimeLogs.enabled` equal to the control-plane chart's value. The
+new chart only widens grants and DNS egress, so the old controller keeps
+working, and existing tenant RoleBindings to its roles receive the new rules.
+Then run the image upgrade command.

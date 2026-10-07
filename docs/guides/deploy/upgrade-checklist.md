@@ -146,9 +146,9 @@ Agent. Existing RWO-backed Agents need no recreation.
 
 ## Apply the release in dependency order
 
-1. Install cluster prerequisites, on two clusters the
+1. Install cluster prerequisites (on two clusters, upgrade the
    [execution chart](../../testing/two-cluster-local.md#upgrade-the-execution-chart)
-   first, and reconcile protected inputs without replacing retained data.
+   first) and reconcile protected inputs without replacing retained data.
 2. Run the canonical migration preflight. Stop if the history is unsupported or
    a required quiescence step is unresolved.
 3. Upgrade the controller, worker, and Console. Wait for database migration,
