@@ -20,8 +20,7 @@
         "runtime image Codex Harness exits promptly on SIGTERM in every startup phase",
         "runtime image embedded Gateway exits promptly on SIGTERM in every startup phase",
         "runtime image dedicated Gateway exits promptly on SIGTERM while it waits for its Harness",
-        "runtime image Gateway exits if OpenClaw crashes during a peer status outage",
-        "runtime image Gateway rejects a peer changed during replacement startup"
+        "runtime image reconnects an ephemeral native worker from an expired replayed setup code"
       ]
     },
     {
@@ -34,7 +33,9 @@
     {
       "path": "tests/integration/runtime-image-gateway-peer.test.mjs",
       "expectedTests": [
-        "runtime image Gateway respawns OpenClaw in place when its Harness peer changes"
+        "runtime image Gateway respawns OpenClaw in place when its Harness peer changes",
+        "runtime image Gateway exits if OpenClaw crashes during a peer status outage",
+        "runtime image Gateway rejects a peer changed during replacement startup"
       ]
     }
   ]

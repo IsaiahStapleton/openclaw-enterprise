@@ -1,9 +1,9 @@
 // Runtime image workspace node and native worker smoke tests, split from
 // runtime-image-startup-probe.test.mjs and runtime-image-startup.test.mjs so CI
 // can run them beside runtime-image-startup.test.mjs: workspace node enrollment
-// and reconnect, ephemeral native worker reconnect from an expired replayed
-// setup code, descendant reaping across workspace node and Codex restarts, and
-// the inactive Slack approver startup check on both production launchers.
+// and reconnect, descendant reaping across workspace node and Codex restarts,
+// and the inactive Slack approver startup check on both production launchers.
+// Ephemeral native worker reconnect is in runtime-image-startup-probe.test.mjs.
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -44,32 +44,6 @@ test(
     assert.equal(result.sameIdentityAfterRestart, true);
     assert.equal(result.singleBootstrapCompletion, true);
     assert.equal(result.commands.length, 7);
-  },
-);
-
-test(
-  "runtime image reconnects an ephemeral native worker from an expired replayed setup code",
-  imageTestOptions,
-  async (t) => {
-    // Pod restarts replay the enrollment Secret's setup code after its expiry.
-    const configurationPath = await temporaryGatewayConfiguration(t, "codex");
-    const { containerName } = await runGatewaySmoke(t, "codex", {
-      configurationPath: "/etc/openclaw/openclaw.json",
-      entrypoint: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
-      volumes: [`${configurationPath}:/etc/openclaw/openclaw.json:ro`],
-    });
-    const source = await readFile(
-      new URL("../fixtures/runtime-native-worker-restart.mjs", import.meta.url),
-      "utf8",
-    );
-    const { stdout } = await runDocker(
-      ["exec", containerName, "node", "--input-type=module", "-e", source],
-      { timeout: 300_000 * imageSmokeTimeoutMultiplier },
-    );
-    const result = JSON.parse(stdout);
-    assert.equal(result.sameIdentityAfterExpiredReplay, true);
-    assert.equal(result.singleBootstrapCompletion, true);
-    assert.equal(result.unpairedExpiredRejected, true);
   },
 );
 
