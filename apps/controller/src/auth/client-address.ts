@@ -68,7 +68,7 @@ function parseCidr(entry: string): { address: string; prefix: number; family: "i
   const bits = version === 4 ? 32 : 128;
   let prefix = bits;
   if (rawPrefix !== undefined) {
-    // Same grammar as the chart and Compute: no sign, space or leading zero (`/08`).
+    // Same no-leading-zero rule as the chart and Compute: no sign, space or `/08`.
     prefix = /^(?:0|[1-9][0-9]{0,2})$/.test(rawPrefix) ? Number(rawPrefix) : NaN;
   }
   if (extra !== undefined || version === 0 || !Number.isInteger(prefix)) {
