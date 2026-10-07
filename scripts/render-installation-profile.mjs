@@ -517,7 +517,8 @@ function renderOidc(source, diagnostics) {
 // Mirrors the chart's auth.github/auth.google/auth.oidc checks. Activation is one-way, so every
 // profile rerender after activation must keep rendering these values.
 function renderExternalSignIn(controlPlane, github, google, oidc, authBaseUrl, diagnostics) {
-  if (!authBaseUrl.startsWith("https://")) {
+  // The scheme as URL parsing reads it, like the API: HTTPS:// and surrounding spaces pass.
+  if (!URL.canParse(authBaseUrl) || new URL(authBaseUrl).protocol !== "https:") {
     diagnostics.errors.push("controlPlane.authBaseUrl must use HTTPS with external sign-in.");
   }
   for (const key of ["agentNativeAdminDomain", "sharedCookieDomain"]) {

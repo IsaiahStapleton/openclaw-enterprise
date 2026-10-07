@@ -775,6 +775,16 @@ test(
     assert.match(manifests, /name: OCC_AUTH_GITHUB_RECOVERY_USER_ID\n\s+value: "recovery-admin_1"/);
     assert.match(manifests, /name: OCC_AUTH_TRUSTED_PROXY_CIDRS\n\s+value: "10\.42\.0\.0\/16"/);
     assert.doesNotMatch(manifests, /OCC_AUTH_GITHUB_ALLOWED_/);
+    // The API reads the scheme as URL parsing does, so an uppercase HTTPS origin is valid.
+    const uppercase = render(
+      "openclaw",
+      externalSignInInput({ trustedProxy, authBaseUrl: "HTTPS://Console.OCE.example.internal" }),
+    );
+    assert.equal(uppercase.summary.ok, true, uppercase.preflight.errors.join("\n"));
+    assert.match(
+      helmTemplate(uppercase),
+      /name: OCC_AUTH_BASE_URL\n\s+value: "HTTPS:\/\/Console\.OCE\.example\.internal"/,
+    );
     const allowlisted = render(
       "openclaw",
       externalSignInInput({

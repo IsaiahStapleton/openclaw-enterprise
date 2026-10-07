@@ -1103,13 +1103,46 @@ test("the chart refuses native admin base URLs the API refuses at startup", tool
   }
 });
 
+// The bootstrap Job's own check, run as the chart's Job runs it (NODE_ENV=production). Its
+// database is unreachable, so an accepted base URL ends at PERSISTENCE_UNAVAILABLE.
+async function jobCode(baseUrl) {
+  const result = await new Promise((resolve) => {
+    execFile(
+      process.execPath,
+      ["scripts/bootstrap-installation.mjs"],
+      {
+        cwd: repository,
+        env: {
+          PATH: process.env.PATH,
+          NODE_ENV: "production",
+          OCC_DATABASE_URL: "postgresql://127.0.0.1:1/occ",
+          OCC_AUTH_SECRET: secrets["occ-auth/secret"],
+          OCC_AUTH_BASE_URL: baseUrl,
+          OCC_BOOTSTRAP_ADMIN_EMAIL: "admin@oce.example.internal",
+        },
+        timeout: 20_000,
+      },
+      (error, _stdout, output) => resolve({ killed: error?.killed === true, output }),
+    );
+  });
+  assert.ok(!result.killed, `the bootstrap Job timed out for ${JSON.stringify(baseUrl)}`);
+  const failure = result.output
+    .split("\n")
+    .filter((line) => line.startsWith("{") && line.endsWith("}"))
+    .map((line) => JSON.parse(line))
+    .find(({ event }) => event === "installation.bootstrap-failed");
+  assert.ok(failure, result.output);
+  return failure.code;
+}
+
 // The API refuses an auth base URL that is not an absolute HTTP(S) origin: server.mjs parses
 // OCC_AUTH_BASE_URL, and createControllerAuth (validHttpBaseURL, which the bootstrap Job also
-// runs before it) refuses the rest, both as AUTH_BASE_URL_INVALID. The chart refuses the same
-// values at render time and still renders every origin the API accepts. Native admin is off,
-// so only the origin check applies.
+// runs before it) refuses the rest, both as AUTH_BASE_URL_INVALID. The bootstrap Job also
+// refuses plain HTTP unless the host is 127.0.0.1 or localhost. The chart refuses the same
+// values at render time and still renders every origin both accept. Native admin is off, so
+// only the origin checks apply.
 test(
-  "the chart refuses auth base URLs that are not origins, as the API does at startup",
+  "the chart refuses auth base URLs the API or the bootstrap Job refuses",
   tooling,
   async (t) => {
     const directory = await startupDirectory(t);
@@ -1137,6 +1170,8 @@ test(
       }
       assert.fail(`createControllerAuth accepted ${baseUrl} without an Installation`);
     };
+    const notOrigin = /auth\.baseUrl must be an absolute HTTP\(S\) origin/;
+    const plainHttp = /auth\.baseUrl must use HTTPS unless its host is 127\.0\.0\.1 or localhost/;
     const cases = [
       ...[
         "https://console.oce.example.internal/occ",
@@ -1152,7 +1187,8 @@ test(
         "ftp://console.oce.example.internal",
         "https://console.oce.example.internal:65536",
         "https://",
-      ].map((baseUrl) => ({ baseUrl, renders: false, accepted: false })),
+        "http://localhost/occ",
+      ].map((baseUrl) => ({ baseUrl, chart: notOrigin, api: false, job: false })),
       ...[
         "https://console.oce.example.internal",
         "https://console.oce.example.internal/",
@@ -1166,33 +1202,61 @@ test(
         "https://console.oce.example.internal#",
         "https://192.0.2.10",
         "https://[2001:db8::10]:8443",
-        "http://console.oce.example.internal",
-      ].map((baseUrl) => ({ baseUrl, renders: true, accepted: true })),
-      // Deliberately stricter: Node repairs these degenerate spellings into an origin.
+        "https://localhost",
+        "http://127.0.0.1",
+        "http://127.0.0.1:8080/",
+        "http://localhost:8080",
+        "HTTP://LocalHost:8080",
+        " http://localhost ",
+      ].map((baseUrl) => ({ baseUrl, chart: undefined, api: true, job: true })),
+      // The API serves plain HTTP anywhere, but the bootstrap Job refuses it off loopback.
       ...[
-        "https:console.oce.example.internal",
-        "https://console.oce.example.internal/.",
-        "https://console.oce.example.internal/%2e",
-      ].map((baseUrl) => ({ baseUrl, renders: false, accepted: true })),
+        "http://console.oce.example.internal",
+        "HTTP://console.oce.example.internal",
+        "http://192.0.2.10:8080",
+        "http://127.0.0.2",
+        "http://[::1]:8080",
+        "http://localhost.",
+        "http://localhost.oce.example.internal",
+      ].map((baseUrl) => ({ baseUrl, chart: plainHttp, api: true, job: false })),
+      // Deliberately stricter: Node repairs these degenerate spellings into an origin, or
+      // reads another IPv4 spelling (shorthand, octal, hex, trailing dot) as 127.0.0.1.
+      ...[
+        ["https:console.oce.example.internal", notOrigin],
+        ["https://console.oce.example.internal/.", notOrigin],
+        ["https://console.oce.example.internal/%2e", notOrigin],
+        ["http://127.1", plainHttp],
+        ["http://2130706433", plainHttp],
+        ["http://0177.0.0.1", plainHttp],
+        ["http://127.0.0.1.", plainHttp],
+      ].map(([baseUrl, chart]) => ({ baseUrl, chart, api: true, job: true })),
     ];
-    await eachBounded(cases, async ({ baseUrl, renders, accepted }) => {
+    await eachBounded(cases, async ({ baseUrl, chart, api, job }) => {
       const label = JSON.stringify(baseUrl);
-      assert.equal(apiAccepts(baseUrl), accepted, label);
-      if (!renders) {
-        assert.match(
-          await chartRefusal({ ...values, "auth.baseUrl": baseUrl }),
-          /auth\.baseUrl must be an absolute HTTP\(S\) origin/,
-          label,
-        );
+      assert.equal(apiAccepts(baseUrl), api, label);
+      assert.equal(
+        await jobCode(baseUrl),
+        job ? "PERSISTENCE_UNAVAILABLE" : "AUTH_BASE_URL_INVALID",
+        label,
+      );
+      if (chart !== undefined) {
+        assert.match(await chartRefusal({ ...values, "auth.baseUrl": baseUrl }), chart, label);
         return;
       }
       const objects = await renderChart({ ...values, "auth.baseUrl": baseUrl });
-      assert.ok(
-        deploymentEnv(objects, "api").some(
-          ({ name, value }) => name === "OCC_AUTH_BASE_URL" && value === baseUrl,
-        ),
-        label,
-      );
+      const bootstrap = objects
+        .filter(({ kind }) => kind === "Job")
+        .flatMap(({ spec }) => spec.template.spec.containers)
+        .find(({ name }) => name === "bootstrap");
+      for (const [workload, env] of [
+        ["api", deploymentEnv(objects, "api")],
+        ["bootstrap", bootstrap.env],
+      ]) {
+        assert.ok(
+          env.some(({ name, value }) => name === "OCC_AUTH_BASE_URL" && value === baseUrl),
+          `${label} ${workload}`,
+        );
+      }
       // The real entrypoint gets past configuration with the rendered value.
       assert.equal(
         await startupCode(directory, { ...environment, OCC_AUTH_BASE_URL: baseUrl }),
@@ -1210,3 +1274,42 @@ test(
     );
   },
 );
+
+// The chart's sign-in checks read the scheme as URL parsing does, like the API: an uppercase
+// HTTPS origin, or one with surrounding spaces, passes for GitHub, Google and OIDC. Plain HTTP
+// stays refused even on loopback, where the bootstrap Job would accept it. The API also requires
+// HTTPS for production external sign-in, but only after its database opens, so only the chart's
+// refusal is checked here.
+test("external sign-in accepts the HTTPS spellings the API accepts", tooling, async (t) => {
+  const directory = await startupDirectory(t);
+  const cases = [];
+  for (const [provider, values, settings] of [
+    ["GitHub", githubUpgradeValues(recoveryUserId), githubUpgradeSettings(recoveryUserId)],
+    ["Google", googleUpgradeValues(recoveryUserId), googleUpgradeSettings(recoveryUserId)],
+    ["OIDC", oidcUpgradeValues(recoveryUserId), oidcUpgradeSettings(recoveryUserId)],
+  ]) {
+    assert.match(
+      await chartRefusal({ ...values, "auth.baseUrl": "http://localhost:8080" }),
+      new RegExp(`auth\\.${provider.toLowerCase()} requires an HTTPS auth\\.baseUrl`),
+      provider,
+    );
+    for (const baseUrl of [
+      "HTTPS://Console.OCE.example.internal",
+      " https://console.oce.example.internal ",
+    ]) {
+      cases.push({ label: `${provider} ${JSON.stringify(baseUrl)}`, values, settings, baseUrl });
+    }
+  }
+  await eachBounded(cases, async ({ label, values, settings, baseUrl }) => {
+    const rendered = signInSettings(
+      deploymentEnv(await renderChart({ ...values, "auth.baseUrl": baseUrl }), "api"),
+    );
+    assert.deepEqual(rendered, { ...settings, OCC_AUTH_BASE_URL: baseUrl }, label);
+    assert.equal(await jobCode(baseUrl), "PERSISTENCE_UNAVAILABLE", label);
+    assert.equal(
+      await startupCode(directory, resolveSecrets(rendered)),
+      "PERSISTENCE_UNAVAILABLE",
+      label,
+    );
+  });
+});
