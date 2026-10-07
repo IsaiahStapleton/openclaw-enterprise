@@ -2818,28 +2818,25 @@ function finalizeAgentDeletion(
   ) {
     return false;
   }
-  assertInitialized(snapshot);
+  const installation = snapshot.installation;
+  if (installation === undefined) {
+    throw new ScopeViolationError("The server-owned Installation has not been initialized.");
+  }
   const revisionIds = new Set((snapshot.revisions.get(key) ?? []).map((revision) => revision.id));
 
-  // Attempts outlive their revision as evidence. Only a disposed attempt may drop its live
-  // revision (repository_session_attempts_live_revision_valid), so live sessions refuse.
+  // Attempts outlive their revision as evidence (migrations/0035): completion detaches every
+  // attempt's live revision without waiting for repository cleanup, whatever its phase.
   for (const [admissionId, attempt] of snapshot.repositorySessions) {
     if (
-      attempt.namespaceId !== namespaceId ||
-      attempt.agentId !== agentId ||
-      attempt.liveRevisionId === null
+      attempt.namespaceId === namespaceId &&
+      attempt.agentId === agentId &&
+      attempt.liveRevisionId !== null
     ) {
-      continue;
-    }
-    if (attempt.phase !== "disposed") {
-      throw new ResourceStateConflictError(
-        "The deleting Agent still has an undisposed repository session.",
+      snapshot.repositorySessions.set(
+        admissionId,
+        immutableCopy({ ...attempt, liveRevisionId: null }),
       );
     }
-    snapshot.repositorySessions.set(
-      admissionId,
-      immutableCopy({ ...attempt, liveRevisionId: null }),
-    );
   }
 
   // The finalizer's three AccessBinding groups: the Agent's ServicePrincipal as subject, the
@@ -2857,12 +2854,8 @@ function finalizeAgentDeletion(
     }
   }
 
-  // Withdrawals cascade with their revision, and the setup with its Agent.
-  for (const [withdrawalKey, withdrawal] of snapshot.credentialWithdrawals) {
-    if (withdrawal.namespaceId === namespaceId && revisionIds.has(withdrawal.revisionId)) {
-      snapshot.credentialWithdrawals.delete(withdrawalKey);
-    }
-  }
+  // The setup cascades with its Agent. Credential withdrawals already end with their revision
+  // here (liveWithdrawal), as the database cascade does.
   snapshot.workspaceSetups.delete(key);
   snapshot.revisions.delete(key);
   snapshot.agents.delete(key);
@@ -2870,7 +2863,7 @@ function finalizeAgentDeletion(
   snapshot.audit.push(
     immutableCopy({
       id: `aud_${crypto.randomUUID()}`,
-      installationId: snapshot.installation!.id,
+      installationId: installation.id,
       namespaceId,
       occurredAt: new Date().toISOString(),
       kind: "mutation" as const,

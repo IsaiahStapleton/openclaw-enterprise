@@ -124,9 +124,28 @@ test("memory Agent deletion completion removes the AccessBindings the PostgreSQL
       await unit.iamPolicy.createAccessBinding(created);
     }
   });
-  // A repository session the Agent's runtime opened before deletion.
-  const attempt = sessionAttempt(revision);
-  await store.transact((unit) => unit.repositorySessions.createAttempt(attempt));
+  // Repository sessions the Agent's runtime opened before deletion, and an unfinished
+  // workspace setup.
+  const opening = sessionAttempt(revision);
+  const closing = sessionAttempt(revision);
+  await store.transact(async (unit) => {
+    // One repository has at most one active attempt, so the first moves on before the next.
+    await unit.repositorySessions.createAttempt(closing);
+    await unit.repositorySessions.advanceAttempt({
+      admissionId: closing.admissionId,
+      expectedPhase: "opening",
+      phase: "closing",
+      updatedAt: "2030-03-17T17:46:41.000Z",
+    });
+    await unit.repositorySessions.createAttempt(opening);
+    await unit.workspaceSetups.create({
+      id: `setup_${randomUUID()}`,
+      namespaceId: namespace.id,
+      agentId: agent.id,
+      files: { "AGENTS.md": "# Agent" },
+      completed: false,
+    });
+  });
   const sorted = (bindings) => [...bindings].sort((left, right) => left.id.localeCompare(right.id));
 
   // Nothing completes before deletion is admitted.
@@ -174,37 +193,20 @@ test("memory Agent deletion completion removes the AccessBindings the PostgreSQL
     await unit.operations.append(revisionWork);
   });
 
-  // As in PostgreSQL (repository_session_attempts_live_revision_valid), only a disposed
-  // attempt may lose its live revision, so an open session refuses completion.
-  await assert.rejects(store.completeAgentDeletion(namespace.id, agent.id), {
-    name: "ResourceStateConflictError",
-  });
-  assert.equal(
-    (await store.read((view) => view.iamPolicy.listAccessBindings(namespace.id))).length,
-    removed.length + 1,
-  );
-  await store.transact(async (unit) => {
-    for (const [expectedPhase, phase] of [
-      ["opening", "closing"],
-      ["closing", "disposed"],
-    ]) {
-      await unit.repositorySessions.advanceAttempt({
-        admissionId: attempt.admissionId,
-        expectedPhase,
-        phase,
-        ...(phase === "closing" ? { sessionId: `session-${randomUUID()}` } : {}),
-        updatedAt: "2030-03-17T17:46:41.000Z",
-      });
-    }
-  });
-
   assert.equal(await store.completeAgentDeletion(namespace.id, agent.id), true);
-  // The disposed attempt stays as evidence, without its deleted live revision.
-  const disposed = await store.transact((unit) =>
-    unit.repositorySessions.findAttempt(attempt.admissionId),
-  );
-  assert.equal(disposed.phase, "disposed");
-  assert.equal(disposed.liveRevisionId, null);
+  // As in PostgreSQL (migrations/0035), completion does not wait for repository cleanup:
+  // each attempt stays as evidence in its phase, without its deleted live revision.
+  await store.transact(async (unit) => {
+    for (const [attempt, phase] of [
+      [opening, "opening"],
+      [closing, "closing"],
+    ]) {
+      const kept = await unit.repositorySessions.findAttempt(attempt.admissionId);
+      assert.equal(kept.phase, phase);
+      assert.equal(kept.liveRevisionId, null);
+    }
+    assert.equal(await unit.workspaceSetups.find(namespace.id, agent.id), undefined);
+  });
   await store.read(async (view) => {
     assert.deepEqual(await view.iamPolicy.listAccessBindings(namespace.id), [surviving]);
     assert.deepEqual(await view.iamPolicy.listAccessBindings(other.namespace.id), [otherBinding]);
