@@ -106,6 +106,7 @@ export async function verifyNativeRepositoryJourney({
   // so it cannot establish that writes to the real outside file are denied.
   const outsideDirectory = "/home/node/.openclaw/plugin-skills";
   const outside = `${outsideDirectory}/repository-sandbox-${f.suffix}.txt`;
+  const sandboxProbe = `${outsideDirectory}/repository-sandbox-${f.suffix}.cjs`;
   const sandboxFile = `${workspace}/repository-sandbox-${f.suffix}.txt`;
   const sandboxContent = `sandbox-${f.suffix}\n`;
   const outsideContent = `outside-${f.suffix}\n`;
@@ -119,13 +120,15 @@ export async function verifyNativeRepositoryJourney({
     'process.stdout.write("SANDBOX_DENIED:"+denied+"\\n")',
   ].join(";");
   if (dedicated) {
+    // Keep the probe in the same read-only mount as its sentinel. Native Codex
+    // executes a stable path instead of reformatting an inline JavaScript argument.
     await consumerExec(
-      `const fs=require("node:fs");fs.mkdirSync(${JSON.stringify(outsideDirectory)},{recursive:true});fs.writeFileSync(${JSON.stringify(outside)},${JSON.stringify(outsideContent)})`,
+      `const fs=require("node:fs");fs.mkdirSync(${JSON.stringify(outsideDirectory)},{recursive:true});fs.writeFileSync(${JSON.stringify(outside)},${JSON.stringify(outsideContent)});fs.writeFileSync(${JSON.stringify(sandboxProbe)},${JSON.stringify(sandboxScript)})`,
     );
   }
   const commandSpecs = [
     ...(dedicated
-      ? [{ operation: "sandboxProbe", workdir: workspace, argv: ["node", "-e", sandboxScript] }]
+      ? [{ operation: "sandboxProbe", workdir: workspace, argv: ["node", sandboxProbe] }]
       : []),
     {
       operation: "clone",

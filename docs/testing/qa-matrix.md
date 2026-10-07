@@ -93,6 +93,10 @@ PR creation execute through the real native agent and repository broker; the
 observer reads independent remote state and cleans up only verified owned refs.
 Transcript completion uses a separate plain token so formatting the PR body's
 HTML comment cannot obscure a completed native turn.
+The native sandbox probe runs a fixture script from the read-only plugin mount;
+it must write inside the workspace, report denial outside it, and preserve the
+outside sentinel. Its exact command and result must appear in the native turn
+and gateway transcript.
 A private registry copy restricts pushes to this run’s exact branch names. Any
 existing push allowlist must permit those names. The repository stage enables
 native command tools explicitly; initial model/UI checks retain the preset tool
@@ -212,3 +216,6 @@ not automatically qualify another deployment mode.
 
 Shared fixture extraction does not imply that a live run passed. Consult the
 specific run's outcome and evidence files.
+The direct installed repository suite retains its pre-existing safety guard
+pending qualification of that entry point's remote cleanup; its retained cases
+are not claimed as runnable acceptance coverage.
