@@ -740,7 +740,8 @@ const RUNTIME_LOG_REQUEST_TIMEOUT_MS = 10_000;
 const CREDENTIAL_REGISTRATION_FENCE_MS = 2 * CREDENTIAL_GATEWAY_TIMEOUT_MS + 10_000;
 /**
  * The most references a Secret read or delete examines. Each one costs authorization work,
- * so the bound keeps both the response and the IAM work small.
+ * so the bound keeps both the response and the IAM work small. Delete makes those decisions
+ * while it holds the Namespace and Secret locks, so the bound also limits that lock window.
  */
 const SECRET_CONSUMER_LIMIT = 50;
 const SECRET_CONSUMER_KINDS = Object.freeze([

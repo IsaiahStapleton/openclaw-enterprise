@@ -1065,6 +1065,26 @@ test("Secret consumers name only readable references, on GET and in the delete c
     assert.doesNotMatch(JSON.stringify(read.body), new RegExp(unreadable));
     assert.doesNotMatch(JSON.stringify(memberDelete.body), new RegExp(unreadable));
   }
+  // Delete alone, without read on the Secret, gets the same answer: naming depends only on
+  // reading the referencing resources.
+  const { principal: deleter, app: deleterApp } = await fixture.createPrincipal("secret-deleter");
+  grantRole(fixture.state, deleter.id, {
+    id: "role-consumer-deleter",
+    namespaceId: namespace.id,
+    permissions: { secret: ["delete"] },
+    resource: { kind: "secret", id: key.data.id },
+  });
+  grantRole(fixture.state, deleter.id, {
+    id: "role-consumer-deleter-configuration",
+    namespaceId: namespace.id,
+    permissions: { configuration: ["read"] },
+    resource: { kind: "configuration", id: visible },
+  });
+  assert.equal((await request(deleterApp, "GET", keyPath)).status, 403);
+  assert.deepEqual(
+    (await request(deleterApp, "DELETE", keyPath)).body.error,
+    memberDelete.body.error,
+  );
 
   // The caller who can read everything sees every ID that fits the 256-character message.
   const adminDelete = await request(fixture.app, "DELETE", keyPath);

@@ -334,6 +334,8 @@ function secretReferencedMessage(consumers: Readonly<SecretConsumers>): string {
     }
     return `The Secret is still referenced by ${parts.join("; ")}. ${suffix}`;
   };
+  // Counts alone fit today (at most SECRET_CONSUMER_LIMIT references); the fallback below
+  // keeps the HTTP contract if a label or that limit grows.
   const done = new Set<string>();
   while (done.size < kinds.length) {
     for (const [key] of kinds) {
@@ -348,7 +350,10 @@ function secretReferencedMessage(consumers: Readonly<SecretConsumers>): string {
       }
     }
   }
-  return render();
+  const message = render();
+  return message.length <= SECRET_REFERENCED_MESSAGE_LIMIT
+    ? message
+    : `The Secret is still referenced by other resources. ${suffix}`;
 }
 
 /**
