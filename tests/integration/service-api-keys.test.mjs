@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -476,8 +476,15 @@ test("service API keys authenticate scoped automation without replacing sessions
     const rotatedDetails = JSON.parse(rotated.stdout);
     assert.equal(rotatedDetails.servicePrincipalId, installationPrincipal.id);
     assert.equal(rotatedDetails.key, undefined);
-    assert.equal((await stat(rotatedKeyFile)).mode & 0o777, 0o600);
-    const rotatedKey = JSON.parse(await readFile(rotatedKeyFile, "utf8")).data;
+    // Read mode and content through one handle so both describe the same file.
+    const rotatedHandle = await open(rotatedKeyFile);
+    let rotatedKey;
+    try {
+      assert.equal((await rotatedHandle.stat()).mode & 0o777, 0o600);
+      rotatedKey = JSON.parse(await rotatedHandle.readFile("utf8")).data;
+    } finally {
+      await rotatedHandle.close();
+    }
     assert.equal(rotatedKey.id, rotatedDetails.id);
     assert.ok(!rotated.stdout.includes(rotatedKey.key));
     const rotatedEnv = { ...adminEnv, OCC_SERVICE_KEY_FILE: rotatedKeyFile };

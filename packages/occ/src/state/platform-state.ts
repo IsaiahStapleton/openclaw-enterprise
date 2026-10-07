@@ -2534,6 +2534,7 @@ function repositories(
       }
       if (
         snapshot.servicePrincipals.has(servicePrincipal.id) ||
+        iamSubjects.resolve?.(servicePrincipal.id) !== undefined ||
         iamSubjects.identities.some((identity) => identity.id === servicePrincipal.id)
       ) {
         throw new ResourceConflictError(

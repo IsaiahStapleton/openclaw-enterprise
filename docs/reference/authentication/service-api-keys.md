@@ -45,7 +45,8 @@ curl --fail-with-body --silent --show-error --cookie "$OCC_SESSION_COOKIE_JAR" \
 
 `occ service-key create --service-principal ID --name NAME --out FILE`, with
 `--namespace` for a Namespace principal, makes the same request and writes the
-response to a new `0600` file without printing the key.
+response to a new `0600` file without printing the key. For an Installation
+principal, unset `OCC_NAMESPACE`, which the CLI also sends as `namespaceId`.
 
 Success returns HTTP `201`. The response contains the credential exactly once in
 `data.key` and a non-secret `data.id` needed to revoke it. Record the key and

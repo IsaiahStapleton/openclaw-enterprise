@@ -382,18 +382,28 @@ func (app *application) serviceKeyCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// The file holds the issuance envelope, which --service-key-file reads.
-			if err := json.MarshalWrite(file, map[string]any{"data": key}); err != nil {
-				return fmt.Errorf("failed to write key file: %w", err)
-			}
-			if err := file.Close(); err != nil {
-				return fmt.Errorf("failed to write key file: %w", err)
-			}
-			written = true
 			details, ok := key.(map[string]any)
-			if !ok {
+			keyID, _ := details["id"].(string)
+			if !ok || keyID == "" {
 				return fmt.Errorf("OCC returned an invalid service key")
 			}
+			// The file holds the issuance envelope, which --service-key-file reads.
+			writeErr := json.MarshalWrite(file, map[string]any{"data": key})
+			if writeErr == nil {
+				writeErr = file.Close()
+			}
+			if writeErr != nil {
+				// Nobody holds the unsaved key: revoke it, and name it if that fails too.
+				if _, revokeErr := client.RevokeServiceKey(keyID); revokeErr != nil {
+					return fmt.Errorf(
+						"failed to write key file (%w); revoke unsaved service key %s with occ service-key revoke",
+						writeErr,
+						keyID,
+					)
+				}
+				return fmt.Errorf("failed to write key file (%w); the unsaved service key %s was revoked", writeErr, keyID)
+			}
+			written = true
 			delete(details, "key")
 			return app.printServiceKey(details)
 		},

@@ -66,6 +66,6 @@ const serviceKeyCreateExample = `  occ service-key create --namespace <namespace
     --service-principal <service-principal-id> --name nora-laptop --out nora.json
   OCC_SERVICE_KEY_FILE=nora.json occ --namespace <namespace-id> agent list
 
-  Pass --namespace for a Namespace ServicePrincipal; omit it for an Installation
-  one. You must already hold every grant of the ServicePrincipal. The key file is
+  Pass --namespace for a Namespace ServicePrincipal; for an Installation one, omit
+  it and unset OCC_NAMESPACE. You must already hold every grant of the ServicePrincipal. The key file is
   the only copy of the key: hand it over privately and revoke it when unused.`

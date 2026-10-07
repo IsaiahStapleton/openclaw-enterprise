@@ -266,6 +266,45 @@ test(
     const read = await withKey(key.key, "GET", `/namespaces/${teamId}`);
     assert.equal(read.statusCode, 200, read.body);
     assert.equal(read.json().data.id, teamId);
+    // The documented order (create, bind, then issue) passes the coverage check because the
+    // administrator holds every grant now bound to the principal.
+    const second = await admin("POST", "/api/auth/service-keys", {
+      servicePrincipalId: principal.id,
+      namespaceId: teamId,
+      name: "member-cli-2",
+    });
+    assert.equal(second.statusCode, 201, second.body);
+    assert.equal(
+      (await withKey(second.json().data.key, "GET", `/namespaces/${teamId}`)).statusCode,
+      200,
+    );
+    assert.equal(
+      (await admin("DELETE", `/api/auth/service-keys/${second.json().data.id}`)).statusCode,
+      200,
+    );
+    // The principal cannot be bound in another Namespace, and its key is issued only in its
+    // own Namespace scope, never Installation-wide or for a sibling.
+    const foreignRole = await admin("POST", `/namespaces/${otherId}/iam/roles`, {
+      permissions: [{ action: "read", resourceKind: "namespace" }],
+    });
+    assert.equal(foreignRole.statusCode, 201, foreignRole.body);
+    const foreignBinding = await admin("POST", `/namespaces/${otherId}/iam/access-bindings`, {
+      subjectKind: "identity",
+      subjectId: principal.id,
+      roleId: foreignRole.json().data.id,
+      resourceKind: "namespace",
+      resourceId: otherId,
+    });
+    assert.equal(foreignBinding.statusCode, 400, foreignBinding.body);
+    assert.equal(foreignBinding.json().error.details[0].path, "/subjectId");
+    for (const scope of [{}, { namespaceId: otherId }]) {
+      const misScoped = await admin("POST", "/api/auth/service-keys", {
+        servicePrincipalId: principal.id,
+        name: "mis-scoped",
+        ...scope,
+      });
+      assert.equal(misScoped.statusCode, 400, misScoped.body);
+    }
 
     // The key cannot reach another Namespace, Installation operations, policy management,
     // or credential issuance, including minting principals or keys for itself.

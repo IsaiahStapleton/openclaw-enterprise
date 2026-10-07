@@ -189,7 +189,8 @@ reads one resource; item `DELETE` removes only that resource (Roles and
 AccessBindings). A ServicePrincipal created here is a non-Agent identity fixed
 to the Namespace with no grant; bind it like any subject and issue its
 [service key](authentication/service-api-keys.md). The API cannot delete one yet:
-revoke its keys and AccessBindings to remove its access. Reads return
+revoke its keys and AccessBindings to remove its access. Deleting the Namespace
+does not revoke them, so revoke its keys first. Reads return
 `200`, creation `201`, deletion `204`, and missing resources `404`.
 The [Namespace IAM policy flow](../flows/namespace-iam-policy.md) traces the
 controller, Driver, persistence, and audit path.
