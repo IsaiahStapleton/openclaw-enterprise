@@ -1392,8 +1392,10 @@ test(
 // exactly those that URL parsing refuses in every host context tried are listed. The contexts
 // put Latin, Arabic, Hebrew and virama neighbours on each side, in every label position, so a
 // character refused only by the Bidi or joiner rules, or at a label start, is never listed.
-// JavaScript's Unicode tables can be newer than Go's: a listed code point that Go's RE2 reads as
-// unassigned is refused by the chart's earlier check instead, which is harmless.
+// The refusals follow the IDNA tables of Node's URL parser (ada), so a Node upgrade can change
+// them; this test then names the code points to add or remove. JavaScript's Unicode tables can be
+// newer than Go's: a listed code point that Go's RE2 reads as unassigned is refused by the chart's
+// earlier check instead, which is harmless.
 test("the chart lists exactly the compatibility characters the API's URL parser refuses in a host", async () => {
   const helpers = await readFile(
     join(repository, "deploy/helm/openclaw-enterprise/templates/_helpers.tpl"),
