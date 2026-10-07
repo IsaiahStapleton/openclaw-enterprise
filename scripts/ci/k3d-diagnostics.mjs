@@ -44,15 +44,19 @@ function safeText(value) {
 
 // A k3d agent container prints a kubectl retry against localhost:8080 every
 // few seconds, so a plain tail of its log holds nothing else (finding 15). The
-// excerpt drops those retries, keeps the start of each node's log, its last
-// error and warning lines, and its end, and stays under about 40 KB per node.
+// excerpt drops those retries, keeps the start of each node's log, its first
+// and last error and warning lines, and its end, and stays under about 40 KB
+// per node.
 const KUBECTL_RETRY =
   /couldn't get current server API group list: Get \\?"http:\/\/localhost:8080\/|The connection to the server localhost:8080 was refused/;
+// docker logs --timestamps stamps every line; anything else is a fragment.
+const DOCKER_TIMESTAMP = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/;
 // logrus level=error/warning/fatal, or a klog E/W/F header after the timestamp.
 const PROBLEM_LINE = /\blevel=(?:error|warning|fatal)\b|^\S+ [EWF]\d{4} /;
 const NODE_LOG_LINE_CHARS = 1_000;
 const NODE_LOG_HEAD = { lines: 60, chars: 8_000 };
-const NODE_LOG_PROBLEMS = { lines: 120, chars: 16_000 };
+const NODE_LOG_FIRST_PROBLEMS = { lines: 20, chars: 4_000 };
+const NODE_LOG_LAST_PROBLEMS = { lines: 100, chars: 12_000 };
 const NODE_LOG_TAIL_CHARS = 16_000;
 
 function takeWithin(lines, { lines: maxLines = Infinity, chars }, fromEnd = false) {
@@ -70,31 +74,33 @@ function takeWithin(lines, { lines: maxLines = Infinity, chars }, fromEnd = fals
 }
 
 // Docker returns a container's stdout and stderr separately; --timestamps lets
-// the excerpt restore their order. A redacted line keeps its timestamp.
-export function nodeLogExcerpt(stdout = "", stderr = "") {
+// the excerpt restore their order. Unstamped fragments (an output cap can cut a
+// stream mid-line) are dropped unread, and a redacted line keeps only its
+// timestamp.
+export function nodeLogExcerpt(stdout = "", stderr = "", note) {
   const entries = [];
+  let fragments = 0;
   for (const [stream, text] of [
     [0, stdout],
     [1, stderr],
   ]) {
-    let at = 0;
-    for (const raw of String(text).split("\n")) {
+    for (const raw of String(text ?? "").split("\n")) {
       if (raw.trim() === "") {
         continue;
       }
-      // Test the whole line for credentials before truncating it.
-      const redacted = CREDENTIAL_LINE.test(raw);
-      const line = raw.slice(0, NODE_LOG_LINE_CHARS);
-      const stamp = line.split(" ", 1)[0];
-      const parsed = Date.parse(stamp);
-      at = Number.isNaN(parsed) ? at : parsed;
+      const stamp = raw.split(" ", 1)[0];
+      if (!DOCKER_TIMESTAMP.test(stamp)) {
+        fragments += 1;
+        continue;
+      }
       entries.push({
-        at,
+        at: Date.parse(stamp),
         stream,
         index: entries.length,
-        line,
-        redacted,
-        stamp: Number.isNaN(parsed) ? undefined : stamp,
+        // Test the whole line for credentials before truncating it.
+        redacted: CREDENTIAL_LINE.test(raw),
+        line: raw.slice(0, NODE_LOG_LINE_CHARS),
+        stamp,
       });
     }
   }
@@ -108,38 +114,48 @@ export function nodeLogExcerpt(stdout = "", stderr = "") {
     if (KUBECTL_RETRY.test(line)) {
       retries += 1;
       firstRetry ??= stamp;
-      lastRetry = stamp ?? lastRetry;
+      lastRetry = stamp;
       continue;
     }
-    const text = redacted ? `${stamp ? `${stamp} ` : ""}[redacted credential-bearing line]` : line;
     if (PROBLEM_LINE.test(line)) {
       problems.add(kept.length);
     }
-    kept.push(text);
+    kept.push(redacted ? `${stamp} [redacted credential-bearing line]` : line);
   }
-  const notes =
-    retries > 0
+  const notes = [
+    ...(note ? [`[diagnostics: ${note}]`] : []),
+    ...(fragments > 0 ? [`[diagnostics dropped ${fragments} unstamped line fragments]`] : []),
+    ...(retries > 0
       ? [
-          `[diagnostics omitted ${retries} kubectl retry lines against localhost:8080, ${firstRetry ?? "?"} to ${lastRetry ?? "?"}]`,
+          `[diagnostics omitted ${retries} kubectl retry lines against localhost:8080, ${firstRetry} to ${lastRetry}]`,
         ]
-      : [];
-  const budget = NODE_LOG_HEAD.chars + NODE_LOG_PROBLEMS.chars + NODE_LOG_TAIL_CHARS;
+      : []),
+  ];
+  const budget =
+    NODE_LOG_HEAD.chars +
+    NODE_LOG_FIRST_PROBLEMS.chars +
+    NODE_LOG_LAST_PROBLEMS.chars +
+    NODE_LOG_TAIL_CHARS;
   if (kept.join("\n").length <= budget) {
     return [...notes, ...kept].join("\n");
   }
   const head = takeWithin(kept, NODE_LOG_HEAD);
   const tail = takeWithin(kept.slice(head.length), { chars: NODE_LOG_TAIL_CHARS }, true);
   const middleEnd = kept.length - tail.length;
-  const middleProblems = takeWithin(
-    kept.slice(head.length, middleEnd).filter((_, offset) => problems.has(head.length + offset)),
-    NODE_LOG_PROBLEMS,
-    true,
-  );
+  const middle = kept
+    .slice(head.length, middleEnd)
+    .filter((_, offset) => problems.has(head.length + offset));
+  // An early root cause must survive later repeated warnings.
+  const first = takeWithin(middle, NODE_LOG_FIRST_PROBLEMS);
+  const last = takeWithin(middle.slice(first.length), NODE_LOG_LAST_PROBLEMS, true);
+  const shown = first.length + last.length;
   return [
     ...notes,
     ...head,
-    `[diagnostics omitted ${middleEnd - head.length - middleProblems.length} lines; ${middleProblems.length} later error and warning lines follow]`,
-    ...middleProblems,
+    `[diagnostics omitted ${middleEnd - head.length - shown} lines; ${shown} of ${middle.length} error and warning lines between head and tail follow]`,
+    ...first,
+    ...(middle.length > shown ? ["[...]"] : []),
+    ...last,
     "[diagnostics: end of log follows]",
     ...tail,
   ].join("\n");
@@ -158,7 +174,12 @@ export async function captureK3dDiagnostics({ execFile, cluster, lane, statePath
   const kubectl = process.env.OCC_KUBECTL_BIN ?? "kubectl";
   const docker = process.env.OCC_DOCKER_BIN ?? "docker";
   const scope = ["--kubeconfig", cluster.kubeconfig, "--context", cluster.context];
-  async function observe(command, args, project, maxOutputChars = 2 * 1024 * 1024) {
+  async function observe(
+    command,
+    args,
+    project,
+    { maxOutputChars = 2 * 1024 * 1024, partial } = {},
+  ) {
     try {
       const output = await execFile(command, args, {
         timeoutMs: 10_000,
@@ -167,6 +188,13 @@ export async function captureK3dDiagnostics({ execFile, cluster, lane, statePath
       return { status: "ok", value: project(output) };
     } catch (error) {
       // A broken diagnostic command must never replace the bootstrap failure.
+      if (error.timedOut && partial && (error.stdout || error.stderr)) {
+        try {
+          return { status: "timed-out", value: partial(error) };
+        } catch {
+          // Fall through to the bare status.
+        }
+      }
       return { status: error.timedOut ? "timed-out" : "unavailable" };
     }
   }
@@ -241,7 +269,12 @@ export async function captureK3dDiagnostics({ execFile, cluster, lane, statePath
           docker,
           ["logs", "--tail=20000", "--timestamps", name],
           ({ stdout, stderr }) => nodeLogExcerpt(stdout, stderr),
-          8 * 1024 * 1024,
+          {
+            maxOutputChars: 8 * 1024 * 1024,
+            // A slow read on a struggling host still keeps what it got.
+            partial: ({ stdout, stderr }) =>
+              nodeLogExcerpt(stdout, stderr, "docker logs timed out; partial output"),
+          },
         ),
       })),
     ),

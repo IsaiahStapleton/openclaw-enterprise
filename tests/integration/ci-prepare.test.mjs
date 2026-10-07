@@ -910,6 +910,8 @@ test("k3d node log excerpts stay bounded and keep the start, later errors and th
   const info = (second) =>
     `${at(second)} I0923 kubelet.go:1] "fixture progress ${second}" ${"x".repeat(200)}`;
   const stdout = [
+    // An output cap can start a stream mid-line, past the keyword of a credential.
+    "=do-not-publish-cut-credential more",
     `${at(0)} level=info msg="Starting k3s agent fixture"`,
     ...Array.from({ length: 4_000 }, (_, second) => info(second + 1)),
     `${at(4_001)} level=info msg="fixture end of log"`,
@@ -917,6 +919,8 @@ test("k3d node log excerpts stay bounded and keep the start, later errors and th
   const stderr = [
     `${at(2_000)} E0923 kubelet_node_status.go:1] "Error updating node status" err="fixture lease"`,
     `${at(2_001)} level=error msg="fixture join token=do-not-publish-node-token"`,
+    // The credential keyword sits past the 1000-character line cut.
+    `${at(2_001)} level=warning msg="do-not-publish-long-line ${"y".repeat(1_100)} password=hidden"`,
     ...Array.from(
       { length: 500 },
       (_, index) => `${at(2_002 + index)} The connection to the server localhost:8080 was refused`,
@@ -924,15 +928,13 @@ test("k3d node log excerpts stay bounded and keep the start, later errors and th
   ].join("\n");
   const excerpt = nodeLogExcerpt(stdout, stderr);
   assert.ok(excerpt.length < 42_000, `excerpt has ${excerpt.length} characters`);
-  assert.match(excerpt, /^\[diagnostics omitted 500 kubectl retry lines against localhost:8080/);
+  assert.match(excerpt, /^\[diagnostics dropped 1 unstamped line fragments\]\n/);
+  assert.match(excerpt, /\n\[diagnostics omitted 500 kubectl retry lines against localhost:8080/);
   assert.match(excerpt, /Starting k3s agent fixture/);
   assert.match(excerpt, /Error updating node status/);
   assert.match(excerpt, /\[redacted credential-bearing line\]/);
   assert.match(excerpt, /fixture end of log"$/);
-  assert.match(
-    excerpt,
-    /\[diagnostics omitted \d+ lines; 2 later error and warning lines follow\]/,
-  );
+  assert.match(excerpt, /\[diagnostics omitted \d+ lines; 3 of 3 error and warning lines/);
   assert.doesNotMatch(excerpt, /do-not-publish|localhost:8080 was refused/);
 });
 
