@@ -102,7 +102,7 @@ still requires the Installation, Helm, and service-key settings above. Unsupport
 `503 DEPENDENCY_UNAVAILABLE`.
 
 Sessions and service keys grant no rights without IAM; see
-[denials](../authorization.md#denials-and-failures) for `401` and `403`. See
+[denials](../authorization.md#denials-and-failures) for `401` and `403`,
 [Authentication](../authentication/service-api-keys.md#service-api-keys) for service-key issuance,
 scope, and revocation, and the [deployment guide](../../guides/deploy/service-keys.md#service-api-keys-for-automation)
 for the procedure. Normal issuance and verification require no additional

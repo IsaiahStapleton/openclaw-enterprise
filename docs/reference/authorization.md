@@ -94,10 +94,10 @@ Agent's existing ServicePrincipal, not another platform principal.
 That evidence comes from its issuing cluster and ServiceAccount; it is not a
 portable OCE Agent identity, so a Gateway and dedicated Harness in different
 cluster trust domains cannot share one cluster's ServiceAccount identity. OCC
-token verification, identity exchange, and workload authentication through the
-controller API remain deferred: a future path must verify each environment's
-local evidence, exchange it for a short-lived credential scoped to the Agent
-ServicePrincipal and revision, and authenticate the Gateway and Harness
+token verification, identity exchange, and ServicePrincipal workload
+authentication through the controller API remain deferred: a future path must
+verify each environment's local evidence, exchange it for a short-lived
+credential scoped to the existing Agent ServicePrincipal and revision, and authenticate the Gateway and Harness
 independently. Until OCC has that verifier, exchange, authorization, and a
 runtime client, the projected token does not authenticate an Agent request.
 
@@ -181,8 +181,8 @@ binding additionally identifies the resource kind and ID.
 Use `/namespaces/:namespaceId/iam/roles`,
 `/namespaces/:namespaceId/iam/access-bindings`, and
 `/namespaces/:namespaceId/iam/service-principals`. Collection `GET` lists policy in
-that Namespace and `POST` creates a server-identified resource (`201`). Item
-`GET` reads one (`200`); item `DELETE` removes only that Role or AccessBinding
+that Namespace (`200`) and `POST` creates a server-identified resource (`201`).
+Item `GET` reads one (`200`); item `DELETE` removes only that Role or AccessBinding
 (`204`). Missing resources return `404`. A ServicePrincipal created here is a
 non-Agent identity fixed to the Namespace with no grant; bind it like any
 subject and issue its [service key](authentication/service-api-keys.md). The API
@@ -209,9 +209,10 @@ management return `503 DEPENDENCY_UNAVAILABLE`; OCC never substitutes native IAM
 Create a reusable Role with a nonempty, duplicate-free permission set of
 actions that some operation checks on each kind (the per-kind table in the
 [permissions cheat sheet](cheatsheets/permissions.md)). Role creation returns
-`400 INVALID_REQUEST` naming any pair that would grant nothing, such as
-`secret:read_logs` or `configuration:deploy`, and refuses `create` Permissions
-the same way (detail path of the first, `/permissions/<i>/action`). A valid Role:
+`400 INVALID_REQUEST` naming any pair that would grant nothing (detail path
+`/permissions`), such as `secret:read_logs` or `configuration:deploy`, and
+refuses `create` Permissions with the detail path of the first
+(`/permissions/<i>/action`). A valid Role:
 
 ```json
 {
