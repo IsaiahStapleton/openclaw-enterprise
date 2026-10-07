@@ -380,8 +380,19 @@ test(
     ]) {
       await assert.rejects(render(override), /scraperNamespaceLabels/);
     }
-    for (const port of ["0", "65536", "8080", "9.5"]) {
+    for (const port of ["0", "010", "65536", "8080", "9.5"]) {
       await assert.rejects(render({ "metrics.port": port }), /metrics.port/);
+    }
+    const shortPort = await resources((await render({ "metrics.port": "8" })).stdout);
+    for (const component of ["api", "worker"]) {
+      const container = shortPort.find(
+        (item) =>
+          item.kind === "Deployment" && item.metadata.name === `openclaw-enterprise-${component}`,
+      ).spec.template.spec.containers[0];
+      assert.equal(container.env.find((item) => item.name === "OCC_METRICS_PORT").value, "8");
+      assert.ok(
+        container.ports.some((port) => port.name === "metrics" && port.containerPort === 8),
+      );
     }
     const selected = {
       "metrics.enabled": "true",
