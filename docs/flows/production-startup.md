@@ -295,8 +295,9 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
 - Code `PRESET_FILE_INVALID`: a bad `presets.files` list or file (missing,
   unreadable, malformed, invalid, duplicate).
 - `kubectl -n openclaw-system logs job/oce-initialization -c bootstrap` is the
-  first check for unsafe output storage, existing output files, database-role
-  failures, auth origin errors, and administrator/IAM mismatch.
+  first check for unsafe output storage, existing outputs, database-role
+  failures, auth errors (`AUTH_SECRET_INVALID`, `AUTH_BASE_URL_INVALID`), and
+  administrator/IAM mismatch.
 - `occ installation get` must display an `ID` equal to `meta.installationId`
   from the retrieved key file.
 - Changing an external startup Secret alone does not restart the API or worker;

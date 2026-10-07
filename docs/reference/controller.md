@@ -188,6 +188,13 @@ worker does not expose an HTTP health endpoint.
   answer from the Kubernetes API server in the event's `host` and `port`.
   Confirm the API and worker egress policy still allows that address (Helm
   `cluster.cidrs`) and that the server is running.
+- **`AUTH_SECRET_INVALID` or `AUTH_BASE_URL_INVALID` at startup:** The API
+  and the initialization Job refuse a missing `OCC_AUTH_SECRET` or one under 32
+  characters (`AUTH_SECRET_INVALID`), and an `OCC_AUTH_BASE_URL` that is not an
+  absolute HTTP(S) origin (`AUTH_BASE_URL_INVALID`). The API also reports
+  `AUTH_BASE_URL_INVALID` for an `OCC_AUTH_COOKIE_DOMAIN` that is malformed, a
+  public suffix, does not contain the base URL host, or is used without HTTPS
+  session cookies. In development the base URL host must be loopback.
 - **Configuration operations fail:** Verify exact Namespace or Configuration
   authorization, tenant-local ConfigMap CRUD, and a native JSON configuration
   document;
