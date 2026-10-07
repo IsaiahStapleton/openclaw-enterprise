@@ -599,6 +599,49 @@ test("production Helm values example renders the backendless default chart", too
   assert.ok(!objects.some(({ metadata }) => metadata.name.endsWith("-api-chatgpt-egress")));
 });
 
+test(
+  "initialization hooks fit Kubernetes Job names for valid Helm release names",
+  tooling,
+  async (t) => {
+    const names = new Set();
+    for (const release of [
+      "oce",
+      "a".repeat(48),
+      "a".repeat(49),
+      "a".repeat(53),
+      "a".repeat(52) + "b",
+    ]) {
+      await t.test(`release ${release.length} characters, ending ${release.at(-1)}`, async () => {
+        let installedName;
+        for (const isUpgrade of [false, true]) {
+          const objects = await resources((await render({}, { release, isUpgrade })).stdout);
+          const job = objects.find(({ kind }) => kind === "Job");
+          // The real Helm hook must survive admission before migration/bootstrap can run.
+          assert.ok(
+            job.metadata.name.length <= 63,
+            `Job name exceeds 63 characters: ${job.metadata.name}`,
+          );
+          assert.match(job.metadata.name, /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/);
+          assert.ok(job.metadata.name.startsWith(release));
+          assert.equal(job.metadata.labels["app.kubernetes.io/instance"], release);
+          assert.equal(job.spec.template.metadata.labels["app.kubernetes.io/instance"], release);
+          assert.equal(job.metadata.annotations["helm.sh/hook"], "pre-install,pre-upgrade");
+          if (isUpgrade) {
+            assert.equal(job.metadata.name, installedName);
+          } else {
+            installedName = job.metadata.name;
+            assert.ok(!names.has(installedName), "Distinct releases must keep distinct hook names");
+            names.add(installedName);
+          }
+          if (release.length <= 48) {
+            assert.equal(job.metadata.name, `${release}-initialization`);
+          }
+        }
+      });
+    }
+  },
+);
+
 test("production settings coexist in fresh and upgrade chart renders", tooling, async () => {
   const settings = {
     ...agentNativeAdminValues,
