@@ -2178,7 +2178,10 @@ test("Namespace IAM routes fail closed without policy management and roll back a
   const rollbackNamespace = await createNamespace(rollback, "rollback-iam");
   const originalAppend = rollbackFixture.auditSink.append.bind(rollbackFixture.auditSink);
   rollbackFixture.auditSink.append = async (event) => {
-    if (event.action === "openclaw.iam.roles.create") {
+    if (
+      event.action === "openclaw.iam.roles.create" ||
+      event.action === "openclaw.iam.service_principals.create"
+    ) {
       throw new Error("synthetic audit outage");
     }
     await originalAppend(event);
@@ -2199,6 +2202,20 @@ test("Namespace IAM routes fail closed without policy management and roll back a
   assert.deepEqual(
     await rollbackFixture.platformState.read((unit) =>
       unit.iamPolicy.listRoles(rollbackNamespace.id),
+    ),
+    [],
+  );
+  // A ServicePrincipal whose create cannot be audited is rolled back.
+  const principalAuditFailure = await rollback.request(
+    "POST",
+    `/namespaces/${rollbackNamespace.id}/iam/service-principals`,
+    { body: {} },
+  );
+  assert.equal(principalAuditFailure.status, 503, JSON.stringify(principalAuditFailure.body));
+  assert.equal(principalAuditFailure.body.error.code, "DEPENDENCY_UNAVAILABLE");
+  assert.deepEqual(
+    await rollbackFixture.platformState.read((unit) =>
+      unit.iamPolicy.listServicePrincipals(rollbackNamespace.id),
     ),
     [],
   );
