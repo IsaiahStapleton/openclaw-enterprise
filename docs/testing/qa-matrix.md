@@ -96,7 +96,8 @@ HTML comment cannot obscure a completed native turn.
 The native sandbox probe runs a fixture script from the read-only plugin mount;
 it must write inside the workspace, report denial outside it, and preserve the
 outside sentinel. Its exact command and result must appear in the native turn
-and gateway transcript.
+and gateway transcript. The probe reports the expected write denial as success;
+repository operations must continue afterward.
 A private registry copy restricts pushes to this run’s exact branch names. Any
 existing push allowlist must permit those names. The repository stage enables
 native command tools explicitly; initial model/UI checks retain the preset tool
