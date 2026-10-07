@@ -31,7 +31,7 @@ session cookie before forwarding to the native gateway.
 | `OCC_DATABASE_URL`                         | Explicit PostgreSQL application-role URL.                                                                          | Must connect to the already migrated controller database.                                                               |
 | `OCC_CONFIG_PATH`                          | Absolute path to trusted Installation startup YAML.                                                                | Selects Configuration, IAM, Compute, and optional account Drivers.                                                      |
 | `OCC_AUTH_SECRET`                          | Mounted high-entropy Better Auth secret.                                                                           | Signs and verifies session material without logging it.                                                                 |
-| `OCC_AUTH_BASE_URL`                        | Absolute controller base URL.                                                                                      | Defines the production Better Auth base URL and cookie origin.                                                          |
+| `OCC_AUTH_BASE_URL`                        | Absolute HTTP(S) origin without a path, query, fragment or user info.                                              | Defines the production Better Auth base URL and cookie origin.                                                          |
 | `OCC_GATEWAY_API_KEY_PATH`                 | Optional absolute path to the private gateway service-key file.                                                    | API only; validates at startup and reads each operation for rotation. Requires Compute endpoint resolution.             |
 | `OCC_CHANNEL_DIRECTORY_PROXY_URL`          | Optional HTTP(S) proxy URL with one literal IPv4 address and explicit port, or the exact Helm-managed Service URL. | API only; routes Slack lookup and credential validation through an HTTP CONNECT tunnel. Invalid values fail startup.    |
 | `OCC_CHANNEL_DIRECTORY_MANAGED_PROXY_HOST` | Optional exact Helm-managed proxy Service host.                                                                    | API only; the one DNS host the Slack directory Driver accepts in the proxy URL instead of an IPv4 address.              |
@@ -134,7 +134,7 @@ the worker or initialization Job.
 | `OCC_AUTH_GITHUB_ALLOWED_TEAMS`    | `auth.github.allowedTeams`, comma-joined   | Optional `org/team-slug` entries whose active members may sign in. The GitHub App needs organization permission Members: read.                                                                                           |
 | `OCC_AUTH_GITHUB_RECOVERY_USER_ID` | `auth.recoveryUserId`                      | Existing local password administrator's user ID; designates the recovery account on first activation.                                                                                                                    |
 | `OCC_AUTH_PASSWORD_SIGN_IN`        | `auth.passwordSignIn`                      | `all` (default, not rendered) or `recovery-only`: only the recovery account may use a password. Needs GitHub, Google or OIDC; see [recovery-only](../authentication/external-sign-in.md#recovery-only-password-sign-in). |
-| `OCC_AUTH_TRUSTED_PROXY_CIDRS`     | `api.trustedProxy.cidrs`                   | Comma-separated IPv4 or IPv6 CIDRs, never `/0`. Requests whose socket peer is inside them may carry forwarded headers.                                                                                                   |
+| `OCC_AUTH_TRUSTED_PROXY_CIDRS`     | `api.trustedProxy.cidrs`                   | Comma-separated IPv4 or IPv6 CIDRs, subject to the limits below. Requests whose socket peer is inside them may carry forwarded headers.                                                                                  |
 | `OCC_AUTH_TRUSTED_PROXY_PRESET`    | `api.trustedProxy.preset`                  | `ingress-nginx` (default), `aws` or `generic`. Named presets read `x-forwarded-for`. Set with the CIDRs.                                                                                                                 |
 | `OCC_AUTH_CLIENT_IP_HEADER`        | `api.trustedProxy.clientAddressHeader`     | Lowercase header name, up to 64 characters, `generic` only. Sign-in limits key on the client address it carries from a trusted peer.                                                                                     |
 
@@ -144,29 +144,35 @@ together. Activation still requires closed ingress and stopped identity writers.
 
 With `auth.github.enabled`, the chart adds an API-only egress policy on TCP 443
 for `github.com` and `api.github.com`. Empty `auth.github.egressCidrs` allows
-`0.0.0.0/0`. To narrow it, list the `web` and `api` IPv4 ranges from
-`https://api.github.com/meta`, and update them when GitHub changes them.
+any address except link-local `169.254.0.0/16`. To narrow it, list the `web` and `api`
+IPv4 ranges from `https://api.github.com/meta`, and update them when GitHub changes them.
+A non-empty list replaces the default, so an egress proxy on a link-local address is
+reached by listing its CIDR; the same holds for Google and OIDC. Listed CIDRs carry no
+link-local exception, so keep them narrow.
 
-`api.trustedProxy` is off by default: the API rejects `Forwarded`,
-`X-Forwarded-*`, and `X-Real-IP` with `403`. Failed password sign-ins are then
-limited per email only, because every browser behind a proxy shares its address.
-With GitHub, Google or OIDC, start, callback, and result then key on the browser's own
-cookies, not the address; start has no per-client limit, only an active cap and
-the 1,000 pending attempts. Startup logs `authentication.sign-in-limit-warning`,
-and Helm's install notes and the profile renderer warn; none of them fail. Set
-`api.trustedProxy` unless the API sees each client's own address. Presets:
+`api.trustedProxy` defaults off: `Forwarded`, `X-Forwarded-*`, and `X-Real-IP`
+return `403`. Failed password sign-ins have per-email limits only: browsers behind
+a proxy share its address. With GitHub, Google or OIDC, start, callback, and result
+key on browser cookies; start has only an active cap and the 1,000-pending-attempt
+cap. Startup logs `authentication.sign-in-limit-warning`; Helm notes and profile
+rendering also warn without failing. Set `api.trustedProxy` unless the API sees
+each client's address. Presets:
 
-- `ingress-nginx`: `cidrs` is the ingress controller Pod CIDR; the header
-  is `x-forwarded-for`. Keep ingress-nginx `use-forwarded-headers` off.
-- `aws`: an Application Load Balancer targeting API Pods; `cidrs` are its
-  subnets and the header is `x-forwarded-for`. A Network Load Balancer
-  preserves the client source and needs no preset unless it fronts ingress-nginx.
+- `ingress-nginx`: trust the ingress controller Pod CIDR; read `x-forwarded-for`.
+  Keep `use-forwarded-headers` off.
+- `aws`: trust Application Load Balancer subnets targeting API Pods; read
+  `x-forwarded-for`. A source-preserving Network Load Balancer needs no preset
+  unless it fronts ingress-nginx.
 - `generic`: `cidrs` and `clientAddressHeader`, such as `x-real-ip`, are required.
 
 Trust only proxies that overwrite or append the header, and admit them through
-`api.clients`. Rendering fails on incomplete GitHub values, an allowlist entry that is
+`api.clients`. Any IPv4-mapped IPv6 spelling counts as IPv4 (prefix 1–32).
+The API and chart refuse entries covering every IPv4 or IPv6 address, including
+`/0`. Mapped peers and header hops use dotted IPv4 sign-in limit keys.
+
+Rendering fails on incomplete GitHub values, an allowlist entry that is
 not an organization login or `org/team-slug`, more than 10 allowlist entries, a shared Secret,
-`agentNativeAdmin.enabled` with GitHub, `/0` proxy CIDRs, another header with a
+`agentNativeAdmin.enabled` with GitHub, refused proxy CIDRs, another header with a
 named preset, or credential, routing and internal headers such as `cookie`.
 
 ### Google sign-in
@@ -184,10 +190,10 @@ guarded profile and `OCC_AUTH_GITHUB_RECOVERY_USER_ID` recovery user as GitHub; 
 With `auth.google.enabled`, the chart adds the API-only egress policy
 `openclaw-enterprise-api-google-login-egress` on TCP 443 for
 `oauth2.googleapis.com` and `www.googleapis.com`. Empty `auth.google.egressCidrs`
-allows `0.0.0.0/0`; narrow it with an egress proxy. Rendering fails on incomplete
-Google values, a Secret shared with GitHub or any other chart Secret,
-`agentNativeAdmin.enabled` with Google, an HTTP base URL, or an allowed domain that
-is not a DNS name.
+allows any address except link-local `169.254.0.0/16`; narrow it with an egress proxy.
+Rendering fails on incomplete Google values, a Secret shared with GitHub or any other
+chart Secret, `agentNativeAdmin.enabled` with Google, an HTTP base URL, or an allowed
+domain that is not a DNS name.
 
 ### OIDC sign-in
 
@@ -204,8 +210,8 @@ recovery user; see [OIDC sign-in](../../guides/deploy/oidc-sign-in.md).
 
 With `auth.oidc.enabled`, the chart adds the API-only egress policy
 `openclaw-enterprise-api-oidc-login-egress` on TCP 443. Empty `auth.oidc.egressCidrs`
-allows any address except `169.254.0.0/16`. The port is the destination Pod's port; an
-IdP inside the cluster on another target port needs
+allows any address except link-local `169.254.0.0/16`. The port is the destination Pod's
+port; an IdP inside the cluster on another target port needs
 [its own egress policy](../../guides/deploy/oidc-sign-in.md#configure-the-chart). Rendering fails on values the API refuses,
 a Secret shared with GitHub, Google or any other chart Secret, `agentNativeAdmin.enabled`
 with OIDC, or an HTTP base URL.
@@ -232,10 +238,10 @@ before another attempt.
 | Variable                          | Required value or format                                                                                |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `OCC_AUTH_SECRET`                 | Same mounted Better Auth secret used by the API.                                                        |
-| `OCC_AUTH_BASE_URL`               | Same absolute Better Auth base URL used by the API.                                                     |
+| `OCC_AUTH_BASE_URL`               | Same as the API; HTTPS unless the host is `localhost` or `127.0.0.1`.                                   |
 | `OCC_BOOTSTRAP_ADMIN_EMAIL`       | Email address for the first administrator account.                                                      |
 | `OCC_BOOTSTRAP_PASSWORD_FILE`     | New file path on protected operator-owned storage for the generated password.                           |
-| `OCC_BOOTSTRAP_INSTALLATION_NAME` | Nonempty display name used when creating the Installation.                                              |
+| `OCC_BOOTSTRAP_INSTALLATION_NAME` | Installation display name; it must follow the API Name rule (`INSTALLATION_NAME_INVALID`).              |
 | `OCC_BOOTSTRAP_SERVICE_KEY_FILE`  | New private absolute JSON path; on fresh production bootstrap, a distinct sibling of the password file. |
 
 Repeated bootstrap preserves the existing Installation only when the exact

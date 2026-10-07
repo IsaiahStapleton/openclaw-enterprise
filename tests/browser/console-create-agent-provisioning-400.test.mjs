@@ -82,6 +82,49 @@ test("Dedicated Agent provisioning shows the API's 400 message for an inline mod
   assert.equal(await configuration.isDisabled(), false);
 });
 
+test("Dedicated Agent provisioning names a Namespace that is not ready", async (t) => {
+  const fixture = await createConsoleAppFixture(t, provisioningDrivers());
+  await fixture.bootstrap();
+  const namespace = await fixture.createNamespace("Provision not ready", { ready: true });
+  const { page } = await newPage(t, fixture);
+  await login(page, fixture, `/console/agents/new?namespace=${namespace.id}`);
+  await page.getByRole("button", { name: "Start without Preset" }).click();
+  await page.getByLabel("Agent name").fill("Provisioned before ready");
+  await page.getByLabel("Authentication method").selectOption("codex_pat");
+  await createModelCredentialSecret(page, `model-secret-${randomUUID()}`);
+  await page.getByLabel("Model", { exact: true }).selectOption("gpt-6-sol");
+  // The API's answer while the Namespace is provisioning.
+  const provisionUrl = `${fixture.origin}/namespaces/${namespace.id}/agents/provision`;
+  await page.route(provisionUrl, (route) =>
+    route.request().method() === "POST"
+      ? route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({
+            error: {
+              code: "NAMESPACE_NOT_READY",
+              message: "The requested Namespace is not ready.",
+            },
+            meta: { requestId: "req_00000000-0000-4000-8000-000000000409" },
+          }),
+        })
+      : route.fallback(),
+  );
+  const rejected = page.waitForResponse(
+    (response) => response.url() === provisionUrl && response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Create Agent" }).click();
+  assert.equal((await rejected).status(), 409);
+  const feedback = page
+    .getByRole("alert")
+    .filter({ hasText: "req_00000000-0000-4000-8000-000000000409" });
+  await feedback.waitFor();
+  assert.equal(
+    await feedback.textContent(),
+    "This Namespace is not ready yet. Check its status on the Namespaces page: a provisioning Namespace becomes ready when its Kubernetes setup completes (on Kubernetes installs, after an operator grants the tenant RoleBindings). Request ID: req_00000000-0000-4000-8000-000000000409",
+  );
+});
+
 test("Agent name counts characters, as the API does, not UTF-16 code units", async (t) => {
   const fixture = await createConsoleAppFixture(t, provisioningDrivers());
   await fixture.bootstrap();
@@ -94,11 +137,16 @@ test("Agent name counts characters, as the API does, not UTF-16 code units", asy
   await createModelCredentialSecret(page, `model-secret-${randomUUID()}`);
   await page.getByLabel("Model", { exact: true }).selectOption("gpt-6-sol");
   const name = page.getByLabel("Agent name");
+  // Only the writes a submit makes. Once a credential is selected, the form also prefetches
+  // the plugin catalog with a read-only POST .../agents/plugins after a 300 ms debounce,
+  // which can land at any point in this test.
+  const writePaths = new Set(
+    ["agents", "agents/provision", "configurations"].map(
+      (path) => `/namespaces/${namespace.id}/${path}`,
+    ),
+  );
   const agentPosts = () =>
-    requests.filter(
-      (request) =>
-        request.method === "POST" && request.path.startsWith(`/namespaces/${namespace.id}/agents`),
-    );
+    requests.filter((request) => request.method === "POST" && writePaths.has(request.path));
   // 200 emoji are 200 characters, the API's limit, but 400 UTF-16 code units.
   const longest = "\u{1F600}".repeat(200);
   const tooLong = `${longest}\u{1F600}`;

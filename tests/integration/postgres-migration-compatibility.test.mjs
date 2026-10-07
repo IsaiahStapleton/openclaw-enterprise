@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -119,6 +119,7 @@ async function ownedPostgres() {
     database,
     port,
     migrationUrl: migration.toString(),
+    composeProjectArgs: ["compose", "-f", server.composeFile, "-p", server.name],
     composeArgs: ["compose", "-f", server.composeFile, "-p", server.name, "exec", "-T", "postgres"],
   };
 }
@@ -769,9 +770,116 @@ test(
     // Native preparation performed the first migration; rerun the supported entry point.
     await runCommand(fixture, "corepack", ["pnpm", "db:migrate"]);
     assert.deepEqual((await pool.query(journalQuery)).rows, beforeJournal);
+    // The history cases run the script text directly; prove pnpm forwards --check too.
+    const checked = await runCommand(fixture, "corepack", [
+      "pnpm",
+      "db:migrate:production",
+      "--check",
+    ]);
+    assert.ok(
+      checked
+        .split("\n")
+        .some(
+          (line) => line === JSON.stringify({ event: "migration.checked", history: "completed" }),
+        ),
+    );
+
+    // The migration command reads only the logging section of the Installation startup file,
+    // through the controller's own startup reader. A file the controller would refuse fails the
+    // command with no migration output and the usual single structured failure line.
+    const configDirectory = await mkdtemp(join(tmpdir(), "occ-migration-config-"));
+    context.after(() => rm(configDirectory, { recursive: true, force: true }));
+    const startupFile = async (name, contents) => {
+      const path = join(configDirectory, name);
+      await writeFile(path, contents, "utf8");
+      return path;
+    };
+    // One refusal from each layer: the logging section, the file reader, and the path rules.
+    const refused = [
+      await startupFile("trace.yaml", "logging:\n  level: trace\n"),
+      await startupFile("invalid.yaml", "logging: [\n"),
+      "relative/startup.yaml",
+    ];
+    for (const path of refused) {
+      const result = await runMigrationCheck(fixture, path);
+      assert.equal(result.code, 1, path);
+      assert.equal(result.stdout, "", path);
+      assert.deepEqual(
+        logEvents(result.stderr),
+        [
+          {
+            severity: "ERROR",
+            service: "occ-migration",
+            event: "migration.failed",
+            code: "MIGRATION_FAILED",
+          },
+        ],
+        path,
+      );
+    }
+    // An accepted file sets the command's log level: info keeps the success event, warn drops it.
+    const checkedOutput = `${JSON.stringify({ event: "migration.checked", history: "completed" })}\n`;
+    const atInfo = await runMigrationCheck(
+      fixture,
+      await startupFile("info.yaml", "logging:\n  level: info\n"),
+    );
+    assert.equal(atInfo.code, 0);
+    assert.equal(atInfo.stdout, checkedOutput);
+    assert.deepEqual(logEvents(atInfo.stderr), [
+      { severity: "INFO", service: "occ-migration", event: "migration.checked" },
+    ]);
+    const atWarn = await runMigrationCheck(
+      fixture,
+      await startupFile("warn.yaml", "logging:\n  level: warn\n"),
+    );
+    assert.equal(atWarn.code, 0);
+    assert.equal(atWarn.stdout, checkedOutput);
+    assert.deepEqual(logEvents(atWarn.stderr), []);
     assert.equal(await runCommand(fixture, "docker", dumpArgs), beforeSchema);
   },
 );
+
+async function runMigrationCheck(fixture, configPath) {
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      process.execPath,
+      ["scripts/migrate-production.mjs", "--check"],
+      {
+        cwd: repositoryRoot,
+        env: {
+          ...process.env,
+          NODE_ENV: "production",
+          OCC_MIGRATION_DATABASE_URL: fixture.migrationUrl,
+          OCC_CONFIG_PATH: configPath,
+        },
+        encoding: "utf8",
+        timeout: 180_000,
+      },
+    );
+    return { code: 0, stdout, stderr };
+  } catch (error) {
+    if (typeof error.code !== "number") {
+      // Subprocess errors can retain connection credentials in stdout or stderr.
+      // eslint-disable-next-line preserve-caught-error
+      throw new Error(
+        `Migration subprocess failed unexpectedly (signal=${error.signal ?? "none"}).`,
+      );
+    }
+    return { code: error.code, stdout: error.stdout, stderr: error.stderr };
+  }
+}
+
+// Structured log lines without their timestamps.
+function logEvents(stderr) {
+  return stderr
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const { time, ...event } = JSON.parse(line);
+      assert.equal(typeof time, "string");
+      return event;
+    });
+}
 
 const historySelectors = [
   process.env.OCC_MIGRATION_HISTORY_DATABASE_URL,
@@ -781,10 +889,26 @@ const historySelectors = [
 const requiresHistoryPostgres = {
   skip: historySelectors.every((value) => value === undefined) && requiresOwnedPostgres.skip,
 };
+// The subtests of these cases run four at a time (`void context.test`): each owns its
+// database and migration subprocesses, the migration lock is a per-database advisory
+// lock, and every fixture changes only that database's catalogs and ACLs, never roles.
+// node:test still waits for every subtest and fails the parent if one fails.
+const concurrentHistoryPostgres = { ...requiresHistoryPostgres, concurrency: 4 };
 
 async function migrationHistoryFixture() {
   if (historySelectors.every((value) => value === undefined)) {
-    return { ...(await ownedPostgres()), databasePrefix: "openclaw_ci_canonical" };
+    const fixture = await ownedPostgres();
+    // Resolve the Compose service's container once: `docker exec` skips the Compose
+    // project load that each of the several hundred administrator psql calls would repeat.
+    const container = (
+      await runCommand(fixture, "docker", [...fixture.composeProjectArgs, "ps", "-q", "postgres"])
+    ).trim();
+    assert.match(container, /^[a-f0-9]{12,64}$/);
+    return {
+      ...fixture,
+      composeArgs: ["exec", container],
+      databasePrefix: "openclaw_ci_canonical",
+    };
   }
   assert.ok(historySelectors.every((value) => typeof value === "string" && value.length > 0));
   const [migrationUrl, container, databasePrefix] = historySelectors;
@@ -922,18 +1046,27 @@ async function installProviderCompletedHistory(db) {
   }
 }
 
+// The history cases start several hundred migration commands on a CPU-bound 2-CPU CI
+// runner, and pnpm's own startup costs about 1 s of CPU per call. Run each package.json
+// script's exact text through `sh` with this Node first on PATH, as pnpm does. The "Drizzle
+// second migration" case still runs both commands through `corepack pnpm`, every prepared CI
+// database is migrated that way, and the Helm migration Job runs the script file directly.
+const migrationScripts = readFile(join(repositoryRoot, "package.json"), "utf8").then(
+  (text) => JSON.parse(text).scripts,
+);
+
 async function runHistoryMigration(db, mode = "development", checkOnly = false) {
-  const args = [
-    "pnpm",
-    mode === "production" ? "db:migrate:production" : "db:migrate",
-    ...(checkOnly ? ["--check"] : []),
+  const script = (await migrationScripts)[
+    mode === "production" ? "db:migrate:production" : "db:migrate"
   ];
+  assert.equal(typeof script, "string");
+  const args = ["-c", `${script} "$@"`, "sh", ...(checkOnly ? ["--check"] : [])];
   try {
-    const { stdout } = await execFileAsync("corepack", args, {
+    const { stdout } = await execFileAsync("sh", args, {
       cwd: repositoryRoot,
       env: {
         ...process.env,
-        pnpm_config_verify_deps_before_run: "false",
+        PATH: `${dirname(process.execPath)}:${process.env.PATH}`,
         OCC_MIGRATION_DATABASE_URL: db.migrationUrl,
       },
       encoding: "utf8",
@@ -1435,11 +1568,11 @@ async function canonicalData(db) {
 
 test(
   "Canonical migration commands preserve main data and serialize fresh/repeat runners",
-  requiresHistoryPostgres,
+  concurrentHistoryPostgres,
   async (context) => {
     const fixture = await migrationHistoryFixture();
     for (const schemas of [false, true]) {
-      await context.test(
+      void context.test(
         `fresh ${schemas ? "owner-only schemas" : "absent schemas"}`,
         async (child) => {
           const db = await historyDatabase(child, fixture, "fresh", { schemas });
@@ -1493,7 +1626,7 @@ test(
       [46, "preProvisioningConfigurationRelease"],
       [47, "preAdministratorCredentialSourceGrants"],
     ]) {
-      await context.test(`populated canonical ${history}`, async (child) => {
+      void context.test(`populated canonical ${history}`, async (child) => {
         const db = await historyDatabase(child, fixture, "main", { prefix });
         await seedCanonicalData(db, { preset: prefix >= 25 });
         const before = await canonicalData(db);
@@ -1727,7 +1860,7 @@ test(
 
 test(
   "Canonical migration completes a Provider lineage after later canonical migrations",
-  requiresHistoryPostgres,
+  concurrentHistoryPostgres,
   async (context) => {
     const fixture = await migrationHistoryFixture();
     for (const [prefix, history] of [
@@ -1748,7 +1881,7 @@ test(
       [46, "preProvisioningConfigurationRelease"],
       [47, "preAdministratorCredentialSourceGrants"],
     ]) {
-      await context.test(history, async (child) => {
+      void context.test(history, async (child) => {
         const db = await historyDatabase(child, fixture, "providercontinuation");
         await installProviderCompletedHistory(db);
         // Stock Drizzle appends later canonical migrations while retaining Provider fingerprints.
@@ -1795,7 +1928,7 @@ test(
 
 test(
   "Canonical migration rollback preserves receipts and retries through the other command",
-  requiresHistoryPostgres,
+  concurrentHistoryPostgres,
   async (context) => {
     const fixture = await migrationHistoryFixture();
     for (const [prefix, history] of [
@@ -1824,7 +1957,7 @@ test(
       [46, "preProvisioningConfigurationRelease"],
       // Prefix 47 is omitted: 0048 only updates rows, so it has no DDL for the trigger to abort.
     ]) {
-      await context.test(`prefix ${prefix} transaction`, async (child) => {
+      void context.test(`prefix ${prefix} transaction`, async (child) => {
         const db = await historyDatabase(child, fixture, "rollback", { prefix });
         if (prefix) {
           await seedCanonicalData(db, { preset: prefix >= 25 });
@@ -1871,7 +2004,7 @@ test(
 
 test(
   "Canonical migration refuses unexplained histories before mutation",
-  requiresHistoryPostgres,
+  concurrentHistoryPostgres,
   async (context) => {
     const fixture = await migrationHistoryFixture();
     const manifest = JSON.parse(
@@ -1902,7 +2035,7 @@ test(
       ["ledger-grant", 25, "GRANT SELECT ON drizzle.__drizzle_migrations TO occ_app"],
     ];
     for (const [label, prefix, sql] of cases) {
-      await context.test(label, async (child) => {
+      void context.test(label, async (child) => {
         const db = await historyDatabase(child, fixture, "refuse", { prefix });
         if (sql) {
           await db.migrator.query(sql);
@@ -1910,7 +2043,7 @@ test(
         await assertHistoryRefused(db);
       });
     }
-    await context.test("published premerge credential history", async (child) => {
+    void context.test("published premerge credential history", async (child) => {
       const db = await historyDatabase(child, fixture, "premerge");
       const journal = JSON.parse(
         await readFile(join(migrationsDirectory, "meta/_journal.json"), "utf8"),
@@ -1933,7 +2066,7 @@ test(
       assert.deepEqual(await canonicalData(db), before);
     });
     for (const slot of [30, 31, 34, 35, 36]) {
-      await context.test(
+      void context.test(
         `unpublished authentication at occupied migration slot ${slot}`,
         async (child) => {
           const db = await historyDatabase(child, fixture, "oldauth");
@@ -1958,7 +2091,7 @@ test(
         },
       );
     }
-    await context.test("application credential", async (child) => {
+    void context.test("application credential", async (child) => {
       const db = await historyDatabase(child, fixture, "app");
       const before = await historySnapshot(db);
       const url = new URL(db.migrationUrl);
@@ -1975,7 +2108,7 @@ test(
 
 test(
   "Canonical migration refuses empty default ACLs on installed histories",
-  requiresHistoryPostgres,
+  concurrentHistoryPostgres,
   async (context) => {
     const fixture = await migrationHistoryFixture();
     for (const history of ["main", "completed"]) {
@@ -1985,7 +2118,7 @@ test(
         ["TABLES", "r"],
         ["SEQUENCES", "S"],
       ]) {
-        await context.test(`${history} ${kind}`, async (child) => {
+        void context.test(`${history} ${kind}`, async (child) => {
           const db = await historyDatabase(child, fixture, "defaults", { prefix: 25 });
           await seedCanonicalData(db, { preset: true });
           if (history === "completed") {
@@ -2024,7 +2157,7 @@ test(
 
 test(
   "Canonical initial schemas admit only finite owner ACL states",
-  requiresHistoryPostgres,
+  concurrentHistoryPostgres,
   async (context) => {
     const fixture = await migrationHistoryFixture();
     for (const [label, setup] of [
@@ -2035,7 +2168,7 @@ test(
         "CREATE SCHEMA occ AUTHORIZATION occ_migrator; CREATE SCHEMA drizzle AUTHORIZATION occ_migrator; GRANT CREATE,USAGE ON SCHEMA occ,drizzle TO occ_migrator",
       ],
     ]) {
-      await context.test(label, async (child) => {
+      void context.test(label, async (child) => {
         const db = await historyDatabase(child, fixture, "initial", { schemas: false });
         await db.migrator.query(setup);
         assert.deepEqual(await runHistoryMigration(db, "production"), {
@@ -2082,7 +2215,7 @@ test(
           `CREATE TEXT SEARCH DICTIONARY ${schema}.unexpected (TEMPLATE=pg_catalog.simple)`,
         ],
       ]) {
-        await context.test(`${schema} ${label}`, async (child) => {
+        void context.test(`${schema} ${label}`, async (child) => {
           const db = await historyDatabase(child, fixture, "acl");
           await historyAdmin(db, db.name, setup);
           await assertHistoryRefused(db);
@@ -2102,7 +2235,7 @@ test(
       ["database-create", (name) => `REVOKE CREATE ON DATABASE ${name} FROM occ_migrator`],
       ["application-create", (name) => `GRANT CREATE ON DATABASE ${name} TO occ_app`],
     ]) {
-      await context.test(label, async (child) => {
+      void context.test(label, async (child) => {
         const db = await historyDatabase(child, fixture, "roles");
         await historyAdmin(db, db.name, setup(db.name));
         await assertHistoryRefused(db);

@@ -99,13 +99,13 @@ images from Helm values or rewrite Driver configuration.
 
 `scripts/prepare-bootstrap-volume:124`
 
-Before the first install, the operator creates the bootstrap PVC named by
-`bootstrap.password.claimName` and runs the helper with explicit kubeconfig,
-context, namespace, claim, approved Node-capable image, and optional repeated
-`--node-selector KEY=VALUE` labels. The helper launches a bounded preparation
-Pod, applies the selectors before WaitForFirstConsumer storage binds, verifies
-the mounted root is fresh except for filesystem-owned `lost+found`, sets UID/GID
-`1000` with mode `0700`, and refuses to continue on any other entry.
+Before the first install, the operator creates the `bootstrap.password.claimName`
+PVC and runs the helper with explicit kubeconfig, context, namespace, claim,
+approved Node-capable image, and optional `--node-selector KEY=VALUE` labels.
+The preparation Pod preserves string namespaces and selector keys, applying selectors
+before WaitForFirstConsumer binding. The helper requires a fresh
+root except for filesystem-owned `lost+found`, sets UID/GID `1000` with mode
+`0700`, and refuses other entries.
 
 If cluster policy forbids the helper Pod, storage administration owns the same
 state transition through an approved storage workflow. A preprepared claim goes
@@ -294,8 +294,9 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
 - Code `PRESET_FILE_INVALID`: a bad `presets.files` list or file (missing,
   unreadable, malformed, invalid, duplicate).
 - `kubectl -n openclaw-system logs job/oce-initialization -c bootstrap` is the
-  first check for unsafe output storage, existing output files, database-role
-  failures, auth origin errors, and administrator/IAM mismatch.
+  first check for unsafe output storage, existing outputs, database-role
+  failures, auth errors (`AUTH_SECRET_INVALID`, `AUTH_BASE_URL_INVALID`), and
+  administrator/IAM mismatch.
 - `occ installation get` must display an `ID` equal to `meta.installationId`
   from the retrieved key file.
 - Changing an external startup Secret alone does not restart the API or worker;
@@ -323,6 +324,7 @@ model calls remain unproven until the tenant deployment and TUI procedures run.
 ## Changelog
 
 - 2026-10-05 12:10: Bound initialization hook names for valid long Helm releases. (authoring-run/54e33467-f3d2-4f4e-afad-952157ec12f0 - 4cda6515736280ca39f0fbe92cff78194b2c3638)
+- 2026-10-05 06:59: Preserve bootstrap Pod namespace strings. (01a0f9e4-a0bf-76f1-acdb-e6b55ada490a - 66a4a07028fd0a08c29ea80e8f95cadc48a74932)
 
 - 2026-10-05: Name Preset file failures `PRESET_FILE_INVALID`.
 - 2026-10-04: Poll the startup probe every second.
