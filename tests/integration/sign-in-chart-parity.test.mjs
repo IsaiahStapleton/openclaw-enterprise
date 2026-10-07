@@ -1215,6 +1215,13 @@ test(
         "https://console.oce.example.internal?next=1",
         "https://console.oce.example.internal/?next=1",
         "https://console.oce.example.internal#console",
+        // An empty query or fragment parses as none, but survives serialization
+        // (https://host/?), which would move Better Auth's routes under /?/auth.
+        "https://console.oce.example.internal?",
+        "https://console.oce.example.internal/?",
+        "https://console.oce.example.internal#",
+        "https://console.oce.example.internal/#",
+        " https://console.oce.example.internal? ",
         "https://admin@console.oce.example.internal",
         "https://admin:secret@console.oce.example.internal",
         "https://:secret@console.oce.example.internal",
@@ -1234,8 +1241,6 @@ test(
         "HTTPS://Console.OCE.example.internal",
         "https://console.oce.example.internal.",
         " https://console.oce.example.internal ",
-        "https://console.oce.example.internal?",
-        "https://console.oce.example.internal#",
         "https://192.0.2.10",
         "https://[2001:db8::10]:8443",
         "https://localhost",

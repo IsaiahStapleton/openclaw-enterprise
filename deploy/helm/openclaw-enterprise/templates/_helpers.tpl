@@ -12,10 +12,10 @@
 {{- if regexMatch "^[^\\pL\\pM\\pN\\pP\\pS]|[^\\pL\\pM\\pN\\pP\\pS]$" $baseUrlText -}}{{- fail "auth.baseUrl must not begin or end with Unicode spaces or invisible characters; the API's URL parser keeps them" -}}{{- end -}}
 {{- /* Inside, the host parser refuses spaces, < and > (Go's URL parser keeps < and >), and drops most invisible characters. Only the joiners U+200C and U+200D, which some IDN labels need, may appear besides L, M, N, P and S; this also covers the ends, except for a joiner there. */ -}}
 {{- if regexMatch "[^\\pL\\pM\\pN\\pP\\pS\\x{200C}\\x{200D}]|[<>]" $baseUrlText -}}{{- fail "auth.baseUrl must not contain spaces, invisible characters, < or >; the API's URL parser refuses or drops them in a host" -}}{{- end -}}
-{{- /* The API and the bootstrap Job accept only an absolute HTTP(S) origin (validHttpBaseURL). */ -}}
+{{- /* The API and the bootstrap Job accept only an absolute HTTP(S) origin (validHttpBaseURL). They also refuse a bare ? or #, which urlParse reads as an empty query or fragment. */ -}}
 {{- $baseUrl := urlParse $baseUrlText -}}
 {{- $baseUrlPort := trimPrefix ":" (regexFind ":[0-9]+$" $baseUrl.host) -}}
-{{- if or (not (has $baseUrl.scheme (list "http" "https"))) (not $baseUrl.hostname) $baseUrl.userinfo (not (has $baseUrl.path (list "" "/"))) $baseUrl.query $baseUrl.fragment (and $baseUrlPort (gt (atoi $baseUrlPort) 65535)) -}}
+{{- if or (not (has $baseUrl.scheme (list "http" "https"))) (not $baseUrl.hostname) $baseUrl.userinfo (not (has $baseUrl.path (list "" "/"))) $baseUrl.query $baseUrl.fragment (regexMatch "[?#]" $baseUrlText) (and $baseUrlPort (gt (atoi $baseUrlPort) 65535)) -}}
 {{- fail "auth.baseUrl must be an absolute HTTP(S) origin such as https://console.example.com, without a path, query, fragment or user info" -}}
 {{- end -}}
 {{- if or (not .Values.auth.secretName) (not .Values.auth.secretKey) -}}{{- fail "auth must reference an operator-created Better Auth signing Secret" -}}{{- end -}}
