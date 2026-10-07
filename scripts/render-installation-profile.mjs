@@ -225,7 +225,7 @@ function httpOrigin(value) {
     /[?#]/.test(stripped) ||
     /^[^\p{L}\p{M}\p{N}\p{P}\p{S}]|[^\p{L}\p{M}\p{N}\p{P}\p{S}]$/u.test(stripped) ||
     /[^\p{L}\p{M}\p{N}\p{P}\p{S}\u200c\u200d]/u.test(stripped) ||
-    !/^https?:\/\/[^/?#]*\/?(?:[?#].*)?$/i.test(stripped)
+    !/^https?:\/\/[^/?#]*\/?$/i.test(stripped)
   ) {
     return false;
   }

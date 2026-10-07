@@ -1221,6 +1221,7 @@ test(
         "https://console.oce.example.internal/?",
         "https://console.oce.example.internal#",
         "https://console.oce.example.internal/#",
+        " https://console.oce.example.internal? ",
         "https://admin@console.oce.example.internal",
         "https://admin:secret@console.oce.example.internal",
         "https://:secret@console.oce.example.internal",
