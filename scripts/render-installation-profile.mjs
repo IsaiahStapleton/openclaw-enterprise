@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { isIP } from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -359,6 +360,18 @@ function isIpv4Cidr(value, requiredPrefix) {
   return requiredPrefix === undefined || prefix === requiredPrefix;
 }
 
+// The API refuses a public-suffix shared cookie domain at startup (normalizeSharedCookieDomain)
+// with tldts and its bundled list. Resolve the controller's pinned copy so both use the same
+// list without a new root dependency; load it only when native admin is configured.
+function isPublicSuffix(hostname) {
+  const require = createRequire(new URL("../apps/controller/package.json", import.meta.url));
+  const parsed = require("tldts").parse(hostname, {
+    allowPrivateDomains: true,
+    validateHostname: true,
+  });
+  return parsed.isIp || parsed.domain === null || parsed.publicSuffix === hostname;
+}
+
 function validateNativeAdminDomains(domain, sharedCookieDomain, authBaseUrl, diagnostics) {
   const lowerDomain = domain.toLowerCase();
   const lowerSharedCookieDomain = sharedCookieDomain.toLowerCase();
@@ -371,6 +384,8 @@ function validateNativeAdminDomains(domain, sharedCookieDomain, authBaseUrl, dia
     diagnostics.errors.push(
       "controlPlane.sharedCookieDomain must be a DNS hostname without a wildcard, port, scheme, or path.",
     );
+  } else if (isPublicSuffix(lowerSharedCookieDomain)) {
+    diagnostics.errors.push("controlPlane.sharedCookieDomain must not be a public suffix.");
   }
   if (
     dnsHostname.test(lowerDomain) &&
