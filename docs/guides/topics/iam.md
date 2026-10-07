@@ -126,3 +126,30 @@ binding refuses a Role with `create` Permissions or none for its target's kind,
 because those grants could never apply. Pass the
 Installation administrator `roleId` at creation only for someone who
 administers the whole Installation.
+
+## Let a person run an existing Agent
+
+People cannot receive Namespace-wide `create`, so an Installation administrator
+creates each Agent with its Configuration and Secrets. To let a team member
+edit, deploy, stop and inspect it, keep the Namespace `read` binding from
+[Add a person](#add-a-person), create one Role with all of these permissions,
+and bind it to each target:
+
+| Target                                    | Permissions                                                  |
+| ----------------------------------------- | ------------------------------------------------------------ |
+| The Agent                                 | `read`, `update`, `deploy`, `operate`, `read_logs`, `delete` |
+| Its Configuration                         | `read`, `update`                                             |
+| Each Secret or credential source it binds | `read`, `operate`                                            |
+| Each Preset the Configuration uses        | `read`                                                       |
+| Each AgentRevision                        | `read`                                                       |
+
+A binding applies only the Role's permissions for its target's kind. Omit
+`delete` to keep the Agent's removal with administrators. Bind each new revision
+after it is deployed, or the person cannot see its status; see
+[Agent revisions](agent-revisions.md). Secret reads return metadata, never values.
+
+The person still cannot create Agents, Secrets or Configurations. To message
+the Agent, the person needs a channel its Configuration sets up or
+[native admin](../../reference/agent-native-admin.md) with Agent `administer`,
+which is unavailable on Installations with GitHub, Google or OIDC sign-in
+enabled.
