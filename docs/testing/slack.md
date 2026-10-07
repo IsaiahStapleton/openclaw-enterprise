@@ -22,6 +22,10 @@ must have a literal IP and explicit port. Both bots must belong to the same
 workspace and have joined the channel. Use an existing Socket Mode app configured
 to receive the test messages.
 
+The in-cluster API uses the same approved proxy to validate Slack credentials
+before deployment. The fixture grants that API egress to the exact proxy address
+and port; the worker keeps its existing isolation policy.
+
 ```sh
 OCC_TEST_SLACK_LIVE=1 \
   node --env-file="$TEST_ENV_FILE" --test tests/integration/harness-topology-k3d-slack-real.test.mjs

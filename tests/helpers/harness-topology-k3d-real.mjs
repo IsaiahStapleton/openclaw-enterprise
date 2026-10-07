@@ -709,6 +709,35 @@ async function startInClusterControllers(
   workerIsolation.metadata.name = `${workerName}-isolation`;
   workerIsolation.spec.podSelector.matchLabels = workerLabels;
   manifests.items.push(workerIsolation);
+  const channelProxyUrl =
+    apiConfiguration.drivers.compute.configuration.runtime?.channels?.proxyUrl;
+  if (channelProxyUrl !== undefined) {
+    const channelProxy = new URL(channelProxyUrl);
+    assert.equal(
+      isIP(channelProxy.hostname),
+      4,
+      "the API Slack proxy requires an exact IPv4 address",
+    );
+    assert.notEqual(channelProxy.port, "", "the API Slack proxy requires an explicit port");
+    // Admission validates Slack credentials before deployment. Give only the API
+    // this approved proxy route; the worker keeps its existing isolation policy.
+    apiContainer.env.push({ name: "OCC_CHANNEL_DIRECTORY_PROXY_URL", value: channelProxyUrl });
+    manifests.items.push({
+      apiVersion: "networking.k8s.io/v1",
+      kind: "NetworkPolicy",
+      metadata: { name: `${name}-channel-proxy`, namespace: platformNamespace },
+      spec: {
+        podSelector: { matchLabels: labels },
+        policyTypes: ["Egress"],
+        egress: [
+          {
+            to: [{ ipBlock: { cidr: `${channelProxy.hostname}/32` } }],
+            ports: [{ protocol: "TCP", port: Number(channelProxy.port) }],
+          },
+        ],
+      },
+    });
+  }
   await applyManifest(JSON.stringify(manifests), {
     redactions: [databaseUrl, authSecret, workspaceGateway.apiKey],
   });
