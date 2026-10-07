@@ -129,11 +129,13 @@ export async function verifyNativeRepositoryJourney({
       workdir: workspace,
       argv: ["git", "clone", `https://github.com/${repository}.git`],
     },
-    { operation: "fetch", workdir: checkout, argv: ["git", "fetch", "origin"] },
+    // The default branch may advance while the Agent deploys. Fetch the
+    // independently captured commit and verify what the server delivered.
+    { operation: "fetch", workdir: checkout, argv: ["git", "fetch", "origin", baseSha] },
     {
       operation: "readBase",
       workdir: checkout,
-      argv: ["git", "rev-parse", `origin/${base}`],
+      argv: ["git", "rev-parse", "FETCH_HEAD"],
     },
     ...(!readOnly
       ? [
