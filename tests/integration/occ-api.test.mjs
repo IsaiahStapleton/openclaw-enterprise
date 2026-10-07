@@ -5196,6 +5196,47 @@ test("Agent provisioning API validates inline configuration with existing Secret
     "in-memory admission must stop before creating an Agent",
   );
 
+  // A managed ServiceAccount PAT source is admitted only for the exact account in the route
+  // Namespace that the caller may read. Every refusal comes before the durable-state step,
+  // which an accepted plan reaches (503 here).
+  const account = await fixture.platformState.transact((unit) =>
+    unit.serviceAccounts.createServiceAccount({
+      id: `sa_${randomUUID()}`,
+      namespaceId: namespace.data.id,
+      name: `provisioning-account-${randomUUID().slice(0, 8)}`,
+    }),
+  );
+  const managedSource = { kind: "service_account", namespaceId: namespace.data.id, id: account.id };
+  const provisionWithAccount = (source) =>
+    injectedRequest(fixture.app, "POST", `/namespaces/${namespace.data.id}/agents/provision`, {
+      body: provisioningRequestBody(namespace.data.id, secrets, {
+        harnessAuth: { method: "codex_pat", source },
+      }),
+    });
+  fixture.state.restrictions.push({
+    id: "deny-provisioning-account-read",
+    namespaceId: namespace.data.id,
+    resourceKind: "service_account",
+    resourceId: account.id,
+    action: "read",
+    effect: "deny",
+  });
+  const unreadableAccount = await provisionWithAccount(managedSource);
+  fixture.state.restrictions.pop();
+  assert.equal(unreadableAccount.status, 403, JSON.stringify(unreadableAccount.body));
+  assert.equal(unreadableAccount.body.error.code, "FORBIDDEN");
+  for (const [description, source] of [
+    ["another Namespace", { ...managedSource, namespaceId: foreignNamespaceId }],
+    ["a missing account", { ...managedSource, id: `sa_${randomUUID()}` }],
+  ]) {
+    const refused = await provisionWithAccount(source);
+    assert.equal(refused.status, 404, `${description}: ${JSON.stringify(refused.body)}`);
+    assert.equal(refused.body.error.code, "NOT_FOUND", description);
+  }
+  const acceptedAccount = await provisionWithAccount(managedSource);
+  assert.equal(acceptedAccount.status, 503, JSON.stringify(acceptedAccount.body));
+  assert.equal(acceptedAccount.body.error.code, "DEPENDENCY_UNAVAILABLE");
+
   const oversized = await injectedRequest(
     fixture.app,
     "POST",

@@ -918,6 +918,43 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
       "Admitted revisions reject unsupported credentials and unsafe Secret keys.",
     );
   }
+  // The admitted ServiceAccount source belongs to the revision's own Namespace, even when
+  // the account ID exists there.
+  await assert.rejects(
+    store.transact((transaction) =>
+      transaction.revisions.createRevision({
+        ...accountRevision,
+        id: identifier("rev"),
+        revision: 2,
+        harnessAuth: {
+          ...accountRevision.harnessAuth,
+          source: { ...accountRevision.harnessAuth.source, namespaceId: namespace.id },
+        },
+      }),
+    ),
+    storeRefusal(
+      "ScopeViolationError",
+      "An AgentRevision requires valid Configuration metadata, a native document, and pinned Harness and Compute descriptors.",
+      "The AgentRevision harness authentication is invalid or legacy.",
+    ),
+    "Admitted revisions reject a ServiceAccount source naming another Namespace.",
+  );
+  // A revision admits exactly the account its Agent is bound to, not a sibling account.
+  await assert.rejects(
+    store.transact((transaction) =>
+      transaction.revisions.createRevision({
+        ...accountRevision,
+        id: identifier("rev"),
+        revision: 2,
+        harnessAuth: {
+          ...accountRevision.harnessAuth,
+          source: { ...accountRevision.harnessAuth.source, id: alternateAccount.id },
+        },
+      }),
+    ),
+    { name: "ScopeViolationError", message: "The AgentRevision belongs to an unavailable Agent." },
+    "Admitted revisions reject an account other than the Agent's binding.",
+  );
 
   await store.read(async (state) => {
     const stored = await state.serviceAccounts.findServiceAccount(accountNamespace.id, account.id);
@@ -1016,6 +1053,25 @@ export async function verifyPlatformStateStoreContract(store, options = {}) {
       message: "The Agent harness authentication references an unavailable ServiceAccount.",
     },
     "An existing Agent cannot associate a ServiceAccount from another Namespace.",
+  );
+  await assert.rejects(
+    store.transact((transaction) =>
+      transaction.agents.updateConfiguration(
+        accountNamespace.id,
+        accountAgent.id,
+        accountConfiguration.id,
+        undefined,
+        {
+          method: "codex_pat",
+          source: { kind: "service_account", namespaceId: namespace.id, id: account.id },
+        },
+      ),
+    ),
+    {
+      name: "ScopeViolationError",
+      message: "The Agent harness authentication references an unavailable ServiceAccount.",
+    },
+    "A source naming another Namespace is refused even when the account ID exists here.",
   );
   await assert.rejects(
     store.transact((transaction) =>
