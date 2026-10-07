@@ -34,6 +34,8 @@ const HTTP_PROXY_TIMEOUT_MS = 30_000;
 const WS_UPGRADE_TIMEOUT_MS = 30_000;
 const WS_LEASE_INTERVAL_MS = 25_000;
 const WS_LEASE_TIMEOUT_MS = 5_000;
+// How long a browser may take to read what is still queued for it after the gateway closed.
+const WS_CLIENT_DRAIN_TIMEOUT_MS = 30_000;
 const NATIVE_ADMIN_RESERVED_PREFIX = "/__occ/native-admin/";
 const SERVICE_WORKER_CSP = "worker-src 'none'";
 // The native UI renders `/api/users/<id>/avatar` as a plain <img>. Without an
@@ -411,6 +413,27 @@ async function boundedLease(
   }
 }
 
+// Called once the gateway's upgraded socket has closed. When pipe() already ended the browser's
+// socket on the gateway's clean EOF, bytes can still be queued for a slow browser (the last
+// frames, often the close frame), and destroy() would drop them. So keep the socket until the
+// browser has read everything and closed its side, bounded by the drain timeout. Otherwise
+// close it now.
+function closeClientAfterUpstream(socket: Socket): void {
+  if (socket.destroyed) {
+    return;
+  }
+  if (!socket.writableEnded) {
+    socket.destroy();
+    return;
+  }
+  // Nothing reads the browser's bytes any more; discard them, so its EOF can arrive and the
+  // socket closes once our end has flushed.
+  socket.resume();
+  const timer = setTimeout(() => socket.destroy(), WS_CLIENT_DRAIN_TIMEOUT_MS);
+  timer.unref();
+  socket.once("close", () => clearTimeout(timer));
+}
+
 export function proxyNativeAdminWebSocket(options: {
   readonly request: http.IncomingMessage;
   readonly socket: Socket;
@@ -458,7 +481,7 @@ export function proxyNativeAdminWebSocket(options: {
   let connected = false;
   let closeReason: NativeAdminWebSocketCloseReason | undefined;
   const upstreamRequest = https.request(upstream, { method: "GET", headers });
-  const close = (reason: NativeAdminWebSocketCloseReason) => {
+  const close = (reason: NativeAdminWebSocketCloseReason, upstreamClosed = false) => {
     if (closeReason === undefined) {
       closeReason = reason;
     }
@@ -470,7 +493,11 @@ export function proxyNativeAdminWebSocket(options: {
     clearInterval(leaseTimer);
     upstreamRequest.destroy();
     upstreamSocket?.destroy();
-    options.socket.destroy();
+    if (upstreamClosed) {
+      closeClientAfterUpstream(options.socket);
+    } else {
+      options.socket.destroy();
+    }
     if (connected) {
       options.onClose({ connectionId: options.connectionId, reason: closeReason });
     }
@@ -490,7 +517,7 @@ export function proxyNativeAdminWebSocket(options: {
   upstreamRequest.once("upgrade", (response, upgradedSocket, upstreamHead) => {
     upstreamSocket = upgradedSocket;
     upgradedSocket.once("error", () => close("upstream_disconnect"));
-    upgradedSocket.once("close", () => close("upstream_disconnect"));
+    upgradedSocket.once("close", () => close("upstream_disconnect", true));
     const headers = responseHeaders(response.headers, options.context, {
       enforceServiceWorkerCsp: false,
     });

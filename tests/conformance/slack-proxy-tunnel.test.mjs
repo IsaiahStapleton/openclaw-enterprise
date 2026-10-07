@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import net from "node:net";
+import { Duplex } from "node:stream";
 import test from "node:test";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { createSlackProxyServer } from "../../apps/controller/src/slack-proxy.mjs";
 import { availablePort } from "../helpers/available-port.mjs";
 import { connectThroughProxy, startSlackProxy } from "../helpers/slack-proxy.mjs";
 
@@ -151,6 +154,105 @@ test(
     assert.equal(tunnel.body().length, reply.length, "the client received the whole reply");
     assert.ok(tunnel.body().equals(reply), "the client received the reply in order");
     assert.ok(tunnel.sawEnd(), "the client saw a clean EOF");
+  },
+);
+
+// Drives createSlackProxyServer in this process with a client socket whose writes complete only
+// when the test says so, as writes do behind a full TCP send buffer. A real slow client only
+// reaches that state when the kernel buffers happen to be full, so the loopback test above
+// rarely catches a proxy that drops queued bytes; this one does every time. `upstreamSocket()`
+// is the proxy's own socket to the upstream, redirected to `upstreamPort`.
+function heldClientTunnel(t, upstreamPort, serverOptions) {
+  const connect = net.connect;
+  let upstreamSocket;
+  t.mock.method(net, "connect", (options, ...rest) => {
+    upstreamSocket = connect({ ...options, host: "127.0.0.1", port: upstreamPort }, ...rest);
+    return upstreamSocket;
+  });
+  const chunks = [];
+  const held = [];
+  let finished = false;
+  const client = new Duplex({
+    read() {},
+    write(chunk, _encoding, callback) {
+      chunks.push(chunk);
+      held.push(callback);
+    },
+    final(callback) {
+      finished = true;
+      callback();
+    },
+  });
+  client.on("error", () => {});
+  t.after(() => client.destroy());
+  const closed = new Promise((resolve) => client.once("close", resolve));
+  const server = createSlackProxyServer(serverOptions);
+  server.emit("connect", { url: "slack.com:443" }, client, Buffer.alloc(0));
+  return {
+    client,
+    closed,
+    upstreamSocket: () => upstreamSocket,
+    held,
+    bytes: () => Buffer.concat(chunks),
+    finished: () => finished,
+  };
+}
+
+test(
+  "a CONNECT tunnel flushes bytes still queued for the client after the upstream closes",
+  testOptions,
+  async (t) => {
+    // Smaller than the client's high-water mark, so the pipe never pauses the upstream: its EOF
+    // and close reach the proxy while the reply still waits behind the first held write.
+    const reply = randomBytes(1_024);
+    const upstream = await listen(t, (socket) => {
+      socket.on("error", () => {});
+      socket.end(reply);
+    });
+    const tunnel = heldClientTunnel(t, upstream.address().port);
+
+    await bound(
+      new Promise((resolve) => tunnel.upstreamSocket().once("close", resolve)),
+      "upstream close",
+    );
+    // Let the proxy's own close listener on the same socket run.
+    await nextTurn();
+    assert.ok(tunnel.client.writableEnded, "the proxy ended the client after the upstream EOF");
+    assert.ok(tunnel.client.writableLength > 0, "the reply is still queued for the client");
+    assert.equal(tunnel.client.destroyed, false, "the proxy keeps a client that is still reading");
+
+    // The client reads everything, then closes its side.
+    while (tunnel.held.length > 0) {
+      tunnel.held.shift()();
+      await nextTurn();
+    }
+    assert.ok(tunnel.finished(), "the client saw a clean EOF");
+    const body = tunnel.bytes().subarray(tunnel.bytes().indexOf("\r\n\r\n") + 4);
+    assert.match(tunnel.bytes().toString("latin1"), established);
+    assert.ok(body.equals(reply), "the client received the whole reply");
+    tunnel.client.push(null);
+    await bound(tunnel.closed, "client close");
+  },
+);
+
+test(
+  "a client that never reads its queued bytes is closed after the drain timeout",
+  testOptions,
+  async (t) => {
+    const upstream = await listen(t, (socket) => {
+      socket.on("error", () => {});
+      socket.end("never-read");
+    });
+    const tunnel = heldClientTunnel(t, upstream.address().port, { clientDrainTimeoutMs: 200 });
+
+    await bound(
+      new Promise((resolve) => tunnel.upstreamSocket().once("close", resolve)),
+      "upstream close",
+    );
+    await nextTurn();
+    assert.equal(tunnel.client.destroyed, false, "the client gets time to read");
+    await bound(tunnel.closed, "client close after the drain timeout");
+    assert.equal(tunnel.finished(), false, "the stuck client never got a clean EOF");
   },
 );
 

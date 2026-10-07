@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 const DEFAULT_PORT = 3128;
 const CONNECT_TIMEOUT_MS = 10_000;
 const SHUTDOWN_DRAIN_MS = 2_000;
+// How long a client may take to read what is still queued for it after its upstream closed.
+const CLIENT_DRAIN_TIMEOUT_MS = 30_000;
 const ALLOWED_SUFFIXES = [".slack.com", ".slack-edge.com", ".slack-msgs.com"];
 const ALLOWED_HOSTS = new Set(["slack.com", "slack-edge.com", "slack-msgs.com"]);
 
@@ -60,7 +62,28 @@ function reject(socket, statusCode, message) {
   socket.end(`HTTP/1.1 ${statusCode} ${message}\r\nConnection: close\r\n\r\n`);
 }
 
-function createSlackProxyServer() {
+// Called once the upstream socket has closed. When the client's write side was already ended
+// (pipe() ends it on the upstream's clean EOF; reject() ends it after a 502), bytes can still be
+// queued for a slow client, and destroy() would drop them. So keep the socket until the client
+// has read everything and closed its side, bounded by `drainTimeoutMs`. Anything else (an
+// upstream error after the tunnel opened, or a close with no EOF) still closes the client now.
+function closeClientAfterUpstream(clientSocket, drainTimeoutMs) {
+  if (clientSocket.destroyed) {
+    return;
+  }
+  if (!clientSocket.writableEnded) {
+    clientSocket.destroy();
+    return;
+  }
+  // Nothing reads the client's bytes any more; discard them, so its EOF can arrive and the
+  // socket closes once our end has flushed.
+  clientSocket.resume();
+  const timer = setTimeout(() => clientSocket.destroy(), drainTimeoutMs);
+  timer.unref();
+  clientSocket.once("close", () => clearTimeout(timer));
+}
+
+export function createSlackProxyServer({ clientDrainTimeoutMs = CLIENT_DRAIN_TIMEOUT_MS } = {}) {
   const server = createServer((request, response) => {
     response.writeHead(405, { "content-type": "text/plain; charset=utf-8" });
     response.end("CONNECT required\n");
@@ -97,7 +120,7 @@ function createSlackProxyServer() {
       }
       reject(clientSocket, 502, "Bad Gateway");
     });
-    upstream.once("close", () => clientSocket.destroy());
+    upstream.once("close", () => closeClientAfterUpstream(clientSocket, clientDrainTimeoutMs));
     clientSocket.once("close", () => upstream.destroy());
     clientSocket.once("error", () => upstream.destroy());
   });
