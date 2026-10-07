@@ -185,6 +185,20 @@ instance ID stays local.
 `worker.compute-prepare-failed` (a Compute Driver could not prepare a revision) is
 ERROR and keeps `occ.code` plus the Namespace, Agent and revision IDs and work identity
 other worker events keep; the stage, error class, status and message stay local.
+API lifecycle and dependency warnings are exported too. `shutdown.started`,
+`shutdown.completed` and `shutdown.failed` (ERROR, `occ.code`) carry the drain's
+`duration_ms` once it ends; the signal stays local. `database.idle-client-error`
+keeps its SQLSTATE or transport code as `occ.code`. `device_authorization.start_failed`
+keeps `request.id`, `occ.device_authorization.reason` (`unreachable` or `unavailable`)
+and its bounded failure (such as `TimeoutError`) as `occ.device_authorization.failure`.
+`agent_runtime_credentials.cluster_denied` keeps only `request.id`; the denied verb,
+resource and Kubernetes namespace stay local. `agent_provisioning.compute_refused` (the
+Compute Driver refused a provisioning plan for a reason the caller cannot fix) keeps only
+`request.id`; the Driver's reason stays local. `native_admin.websocket_audit_failed`
+keeps the Namespace, Agent and revision IDs, and `native_admin.websocket_denial_audit_failed`
+carries none. `authentication.activation-warning`, `authentication.password-sign-in-warning`
+and `authentication.recovery-seed-warning` keep at most `occ.code`; account IDs and
+messages stay local.
 `presets.default-refresh-skipped` (a default Preset copy kept because policy refused
 its refresh) is WARN and keeps `occ.namespace.id` and `occ.preset.id`; the Preset
 name, refusal text and Restriction IDs stay local. `presets.default-create-skipped`
@@ -241,6 +255,8 @@ for panels, correlation, and authorization limits.
 
 ## Changelog
 
+- 2026-10-06 13:30: Export `agent_provisioning.compute_refused`, the API warning that names a Compute provisioning refusal by request ID.
+- 2026-10-06 06:30: Export the API shutdown, idle database connection, device login, cluster credential denial, native admin audit failure and authentication startup warnings that other pages tell operators to look for.
 - 2026-10-05 05:30: Note that the Preset startup warnings come only from the API.
 - 2026-10-05 03:30: Export `presets.bundled-default-shadowed` as WARN with only its event name.
 - 2026-10-05 02:30: Export `presets.default-create-skipped` as WARN with only the Namespace ID.

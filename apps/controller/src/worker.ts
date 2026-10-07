@@ -1,3 +1,4 @@
+import { isSecretHarnessAuth, isServiceAccountHarnessAuth } from "@openclaw-enterprise/contracts";
 import { isPositiveSafeInteger } from "@openclaw-enterprise/utils";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
@@ -166,19 +167,54 @@ function repositoryCleanupRecheckMs(intervalMs: number, ageMs: number): number {
 }
 
 const LOGGED_ERROR_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/u;
+// A Kubernetes Status reason is one bare CamelCase word, such as Forbidden.
+const LOGGED_STATUS_REASON = /^[A-Za-z]{1,64}$/u;
+
+function loggedHttpStatus(error: unknown): number | undefined {
+  const status =
+    error !== null && typeof error === "object"
+      ? (error as { readonly code?: unknown }).code
+      : undefined;
+  return typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599
+    ? status
+    : undefined;
+}
+
+/**
+ * The HTTP status and Status reason on an error's `cause`. A Driver error that
+ * replaces an SDK error, to keep private request data out of logs (a Kubernetes
+ * private Secret write) or to classify it as transient, keeps them there.
+ */
+function causeStatusLogFields(error: object): {
+  readonly status?: number;
+  readonly reason?: string;
+} {
+  const cause = (error as { readonly cause?: unknown }).cause;
+  const status = loggedHttpStatus(cause);
+  if (status === undefined) {
+    return {};
+  }
+  const reason = (cause as { readonly reason?: unknown }).reason;
+  return {
+    status,
+    ...(typeof reason === "string" && LOGGED_STATUS_REASON.test(reason) ? { reason } : {}),
+  };
+}
 
 /**
  * Log fields that say which dependency failed and why, without provider text:
  * a transient dependency names itself and a closed reason; any other failure
- * gives only its error class and, for an HTTP SDK error, the status.
+ * gives only its error class. Either adds the HTTP status of an SDK error, its
+ * own or its cause's, and the Status reason a cause keeps.
  */
 function revisionFailureLogFields(error: unknown): {
   readonly dependency?: string;
   readonly cause?: string;
   readonly status?: number;
+  readonly reason?: string;
 } {
   if (error instanceof TransientDependencyError) {
-    return { dependency: error.dependency, cause: error.reason };
+    return { dependency: error.dependency, cause: error.reason, ...causeStatusLogFields(error) };
   }
   const record = error !== null && typeof error === "object" ? error : undefined;
   const name =
@@ -190,16 +226,15 @@ function revisionFailureLogFields(error: unknown): {
             candidate !== "Error" &&
             LOGGED_ERROR_NAME.test(candidate),
         );
+  const errorClass = name ?? "Error";
   // Kubernetes SDK errors carry the HTTP status in `code`.
-  const status = (record as { readonly code?: unknown } | undefined)?.code;
-  const httpStatus =
-    typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599
-      ? status
-      : undefined;
-  return {
-    cause: name ?? "Error",
-    ...(httpStatus === undefined ? {} : { status: httpStatus }),
-  };
+  const status = loggedHttpStatus(record);
+  if (status !== undefined) {
+    return { cause: errorClass, status };
+  }
+  return record === undefined
+    ? { cause: errorClass }
+    : { cause: errorClass, ...causeStatusLogFields(record) };
 }
 
 /**
@@ -434,6 +469,14 @@ function validLifecycleHooks(driver: Driver): boolean {
       ([phase, callback]) => phases.has(phase) && typeof callback === "function",
     )
   );
+}
+
+/** A Driver's optional Namespace failure reason, kept only when bounded and printable. */
+function namespaceFailureReason(observation: Observation): string | undefined {
+  const reason = (observation as { readonly reason?: unknown }).reason;
+  return typeof reason === "string" && reason.length > 0 && printableComputeFailureMessage(reason)
+    ? reason
+    : undefined;
 }
 
 function validObservation(value: unknown, namespaceId: string, target: "ready" | "deleted") {
@@ -1580,6 +1623,10 @@ export class ControllerWorker {
       outcome: this.passOutcome,
       code: result.outcome === "succeeded" ? "PROVISIONING_HANDED_OFF" : result.code,
       ...(result.outcome === "succeeded" ? { revisionId: result.revisionId } : {}),
+      // A Compute refusal's reason; status and the Collector export keep only the code.
+      ...(result.outcome !== "succeeded" && result.reason !== undefined
+        ? { reason: result.reason }
+        : {}),
     });
   }
 
@@ -2895,7 +2942,7 @@ export class ControllerWorker {
     }
     const refs = uniqueSecretRefs(secretBindings.bindings);
     const auth = revision.harnessAuth;
-    if (auth.method === "api_key" || auth.method === "codex_pat" || auth.method === "oauth") {
+    if (isSecretHarnessAuth(auth)) {
       if (auth.source?.kind !== "secret" || auth.source.namespaceId !== revision.namespaceId) {
         return { outcome: "permanent", code: "INVALID_HARNESS_AUTH" };
       }
@@ -2907,7 +2954,7 @@ export class ControllerWorker {
         refs.push(auth.source);
       }
     } else if (
-      auth.method !== "chatgpt_service_account" &&
+      !isServiceAccountHarnessAuth(auth) &&
       auth.method !== "credential_source" &&
       auth.method !== "runtime"
     ) {
@@ -2955,13 +3002,16 @@ export class ControllerWorker {
       }
     }
 
-    if (auth.method === "chatgpt_service_account") {
+    if (isServiceAccountHarnessAuth(auth)) {
+      if (auth.source.namespaceId !== revision.namespaceId) {
+        return { outcome: "permanent", code: "INVALID_HARNESS_AUTH" };
+      }
       const accountAuthorization: AuthorizationRequest = {
         principalId: claim.actorId,
         action: "read",
         resource: {
           kind: "service_account",
-          id: auth.serviceAccountId,
+          id: auth.source.id,
           namespaceId: revision.namespaceId,
         },
       };
@@ -2988,17 +3038,14 @@ export class ControllerWorker {
       return { outcome: "permanent", code: "BACKEND_UNAVAILABLE" };
     }
     const auth = revision.harnessAuth;
-    if (auth.method !== "chatgpt_service_account") {
+    if (!isServiceAccountHarnessAuth(auth)) {
       return undefined;
     }
     const { account, binding } = await this.state.read(async (view) => ({
-      account: await view.serviceAccounts.findServiceAccount(
-        revision.namespaceId,
-        auth.serviceAccountId,
-      ),
+      account: await view.serviceAccounts.findServiceAccount(revision.namespaceId, auth.source.id),
       binding: await view.serviceAccounts.findServiceAccountBackendBinding(
         revision.namespaceId,
-        auth.serviceAccountId,
+        auth.source.id,
       ),
     }));
     if (
@@ -3136,11 +3183,7 @@ export class ControllerWorker {
     }
 
     let harnessAuth: ResolvedHarnessAuth;
-    if (
-      revision.harnessAuth.method === "api_key" ||
-      revision.harnessAuth.method === "codex_pat" ||
-      revision.harnessAuth.method === "oauth"
-    ) {
+    if (isSecretHarnessAuth(revision.harnessAuth)) {
       const auth = revision.harnessAuth;
       if (typeof secretDriverId !== "string" || auth.secretDriverId !== secretDriverId) {
         return { result: { outcome: "permanent", code: "SECRET_DRIVER_MISMATCH" } };
@@ -4026,6 +4069,12 @@ export class ControllerWorker {
       resolved.outcome === "retry" && claim.attemptCount >= this.maxAttempts
         ? "permanent"
         : resolved.outcome;
+    // The Compute Driver's bounded reason for a failed Namespace pass; the lifecycle audit
+    // and Namespace status keep only the failure class.
+    const reason =
+      claim.namespaceTarget !== "ready" || resolved.observation?.failure === undefined
+        ? undefined
+        : namespaceFailureReason(resolved.observation);
     this.emit({
       event: "worker.completed",
       ...workLogFields(claim),
@@ -4033,6 +4082,7 @@ export class ControllerWorker {
       result: resolved.outcome,
       outcome: resolved.outcome,
       code: resolved.code,
+      ...(reason === undefined ? {} : { reason }),
     });
   }
 

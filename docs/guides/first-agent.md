@@ -141,6 +141,12 @@ remembers the Agent name; use a new name for the next run.
 
 ## Troubleshoot
 
+- **`No Namespace named default exists`:** the command creates its Agent only in
+  the `default` Namespace from Local setup. After that Namespace is deleted, its
+  name [cannot be reused](../reference/namespaces.md#deletion-and-tombstones), so
+  the command cannot run on that installation. Start a new
+  [Local setup](quickstart.md); [cleanup](quickstart.md#clean-up-and-stop)
+  deletes the current installation and its Agents.
 - **`default` stays in `provisioning` or fails:** [check that OCC and Kubernetes are reachable](deploy/local-kubernetes-development.md#verify-the-local-boundary),
   then check the [Namespace status](../reference/namespaces.md#lifecycle).
 - **A name is already in use:** use a new name if the existing Agent was

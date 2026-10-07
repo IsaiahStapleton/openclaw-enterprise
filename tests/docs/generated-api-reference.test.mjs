@@ -88,30 +88,14 @@ test("generated API reference stays on the approved single page", async () => {
 
 test("every operation with a request body documents 413 and 415", async () => {
   // The controller answers an oversized body 413 and a non-JSON media type 415 on every
-  // route that reads a body; updateCredentialSource documented neither. The /api/auth/*
-  // operations below have the same gap and are fixed separately; shrink this list then.
-  const authOperationsWithoutBodyErrors = [
-    "createAuthAccount",
-    "disableAuthAccount",
-    "enableAuthAccount",
-    "detachAuthMethod",
-    "attachGitHubIdentity",
-    "attachGoogleIdentity",
-    "attachOidcIdentity",
-    "revokeAuthAccountSessions",
-    "confirmGitHubSignIn",
-    "confirmGoogleSignIn",
-    "confirmOidcSignIn",
-    "replaceAuthRecovery",
-    "createServiceKey",
-    "signInEmail",
-  ];
+  // route that reads a body; updateCredentialSource and the /api/auth/* operations
+  // documented neither.
   const document = JSON.parse(await readFile(contractPath, "utf8"));
   const missing = contractOperations(document)
     .filter((operation) => operation.requestBody !== undefined)
     .filter((operation) => !("413" in operation.responses && "415" in operation.responses))
     .map((operation) => operation.operationId);
-  assert.deepEqual(missing.sort(), authOperationsWithoutBodyErrors.sort());
+  assert.deepEqual(missing, []);
 });
 
 test("AccessBinding creation documents request body target read permissions", async () => {
@@ -233,6 +217,18 @@ test("operations without a request body do not list 413 or 415", async () => {
     .filter((operation) => "413" in operation.responses || "415" in operation.responses)
     .map((operation) => operation.operationId);
   assert.deepEqual(listed, []);
+});
+
+test("every operation with a request body documents 400", async () => {
+  // Every body is validated against its operation's schema before the handler runs. Eleven
+  // /api/auth/* operations, whose schemas are inline rather than in the shared route
+  // contract, once omitted the 400 that validation answers.
+  const document = JSON.parse(await readFile(contractPath, "utf8"));
+  const missing = contractOperations(document)
+    .filter((operation) => operation.requestBody !== undefined)
+    .filter((operation) => !("400" in operation.responses))
+    .map((operation) => operation.operationId);
+  assert.deepEqual(missing, []);
 });
 
 test("the error envelope table documents the shared ErrorResponse, not an inline copy", async () => {

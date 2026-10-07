@@ -185,6 +185,24 @@ async function claimExpected(queue, idempotencyKey) {
   assert.fail(`The durable queue did not expose expected work ${idempotencyKey}.`);
 }
 
+// Claims and completes Work, including any unrelated leftover Work, until every
+// expected key was handed out, in whatever order the queue picks. Use it for keys
+// whose relative claim order the test does not pin: claimExpected completes the
+// Work it skips, so claiming such keys one by one fails whenever the queue hands
+// out a later key first.
+async function completeExpected(queue, idempotencyKeys) {
+  const pending = new Set(idempotencyKeys);
+  for (let index = 0; index < 200 && pending.size > 0; index += 1) {
+    const claim = await queue.claim();
+    if (!claim) {
+      break;
+    }
+    pending.delete(claim.idempotencyKey);
+    await queue.complete(claim);
+  }
+  assert.deepEqual([...pending], [], "The durable queue did not expose all expected work.");
+}
+
 test(
   "Namespace creation and deletion retain distinct durable work targets",
   requiresPostgres,
@@ -665,6 +683,13 @@ test(
     assert.equal(recoveredRevision.idempotencyKey, staleRevisionKey);
     assert.notEqual(recoveredRevision.claimToken, staleRevision.claimToken);
     await queue.complete(recoveredRevision);
+    // A completion also ends the work, but only a failure that ends it has a final field.
+    const completion = await pool.query(
+      `SELECT details ? 'final' AS final FROM occ.audit_events
+       WHERE resource_id = $1 AND details->>'reasonCode' = 'RECONCILE_SUCCEEDED'`,
+      [staleRevisionId],
+    );
+    assert.deepEqual(completion.rows, [{ final: false }]);
     const recoveredNamespace = await queue.claim();
     assert.equal(recoveredNamespace.idempotencyKey, namespaceKey);
     assert.notEqual(recoveredNamespace.claimToken, staleNamespace.claimToken);
@@ -700,12 +725,16 @@ for (const source of ["claimed", "queued"]) {
       }
 
       const reasonCode = source === "claimed" ? "LEASE_EXPIRED" : "MAX_ATTEMPTS_EXHAUSTED";
+      // The recovery ends the work, so its evidence is final.
       const snapshot = async (client) => {
         const result = await client.query(
           `SELECT namespace.status, work.state, work.claim_token, work.lease_expires_at,
                   work.completed_at,
                   (SELECT count(*)::integer FROM occ.audit_events
-                   WHERE resource_id = $2 AND details->>'reasonCode' = $3) AS evidence
+                   WHERE resource_id = $2 AND details->>'reasonCode' = $3) AS evidence,
+                  (SELECT count(*)::integer FROM occ.audit_events
+                   WHERE resource_id = $2 AND details->>'reasonCode' = $3
+                     AND details->'final' = 'true'::jsonb) AS final_evidence
            FROM occ.controller_work AS work
            JOIN occ.namespaces AS namespace ON namespace.id = work.namespace_id
            WHERE work.idempotency_key = $1`,
@@ -720,6 +749,7 @@ for (const source of ["claimed", "queued"]) {
         claim_token: null,
         lease_expires_at: null,
         evidence: 1,
+        final_evidence: 1,
       };
 
       // Block Namespace publication to force a real server-side statement
@@ -955,9 +985,10 @@ test(
       [`${prefix}:%`],
     );
     assert.equal(remaining.rowCount, 2);
-    for (const { idempotency_key } of remaining.rows) {
-      await queue.complete(await claimExpected(queue, idempotency_key));
-    }
+    await completeExpected(
+      queue,
+      remaining.rows.map(({ idempotency_key }) => idempotency_key),
+    );
   },
 );
 
@@ -1075,10 +1106,10 @@ test(
     assert.equal(audits.rowCount, 2);
     assert.ok(audits.rows.every(({ events }) => events === 1));
 
+    // Recovery requeues both items at clock_timestamp() in the UPDATE's row order,
+    // which the query plan decides, so either may be claimable first.
     const cleanupQueue = new PostgresWorkQueue(pool, { leaseDurationMs: 1_000, random: () => 0 });
-    for (const key of keys) {
-      await cleanupQueue.complete(await claimExpected(cleanupQueue, key));
-    }
+    await completeExpected(cleanupQueue, keys);
   },
 );
 

@@ -89,6 +89,9 @@
       "path": "tests/conformance/configuration-occ.test.mjs"
     },
     {
+      "path": "tests/conformance/filesystem-configuration.test.mjs"
+    },
+    {
       "path": "tests/conformance/console-api-client.test.mjs"
     },
     {

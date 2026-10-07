@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  assertProviderAttached,
   assertReservedLane,
-  attachProvider,
   clientAddresses,
   composeProductionSignIn,
   consoleOrigin as origin,
@@ -27,6 +27,10 @@ const secrets = {
   "occ-github-login/client-secret": "replacement-client-secret",
 };
 const secondSubject = "9200002";
+// The production slow lane with shorter floors (250 ms doubling to a 500 ms cap instead of
+// 1 s doubling to 8 s). This suite spends password budgets but does not measure pacing, and
+// each reserved-lane check waits about 5 s of real floors otherwise.
+const slowLane = { floorMs: 250, maxFloorMs: 500 };
 
 // Online recovery replacement (#520): the reserved password lane follows the stored
 // designation at once, and a controller restarted with the original
@@ -61,6 +65,7 @@ test(
       databaseUrl,
       settings: githubUpgradeSettings(admin.id),
       secrets,
+      passwordSlowLaneFloors: slowLane,
     });
     let adminHeaders = await signedInHeaders(app, origin, admin, address());
     const readRecovery = async (headers) => {
@@ -76,8 +81,7 @@ test(
       );
 
     // The second administrator works through GitHub while it is up.
-    const attached = await attachProvider(app, adminHeaders, second.id, "github", secondSubject);
-    assert.equal(attached.statusCode, 200, attached.body);
+    await assertProviderAttached(app, adminHeaders, second.id, "github", secondSubject);
     const { callback } = await githubSignIn(app, origin, secondSubject, address());
     assert.equal(callback.headers.location, "/console/", callback.body);
     const secondHeaders = {
@@ -202,6 +206,7 @@ test(
           settings: githubUpgradeSettings(admin.id),
           secrets,
           logger: log.logger,
+          passwordSlowLaneFloors: slowLane,
         });
         assert.deepEqual(
           log.events
