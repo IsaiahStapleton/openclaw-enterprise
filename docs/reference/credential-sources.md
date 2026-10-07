@@ -170,8 +170,10 @@ recreated, a withdrawn non-model source is left out and the revision keeps
 running without it. A withdrawn model source instead fails provisioning with
 `CREDENTIAL_WITHDRAWN`, and maintenance of the revision stops preparing it. While any
 withdrawal is `pending`, each maintenance pass queues another attempt if none is
-outstanding. Once a model source is `revoked`, maintenance stops, so Compute no
-longer repairs the revision until a redeploy replaces it.
+outstanding. After model-source withdrawal, maintenance never prepares the revision
+again. It continues recovering pending tool withdrawals even when the model
+source is already `revoked`, and stops only when every withdrawal is `revoked`.
+Redeploy to resume Compute repair.
 
 Withdrawals of different sources on one revision share one worker attempt, but
 each is authorized by its own `requestedBy`. A requester who lost

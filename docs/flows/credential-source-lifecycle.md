@@ -249,9 +249,10 @@ Maintenance of the active revision (scheduled only when the Compute Driver or
 the revision's repository credentials declare an interval) checks for a withdrawal before it resolves
 the revision's credentials
 (`apps/controller/src/worker.ts:completeWithdrawnRevisionMaintenance`). While
-the withdrawal is `pending`, the pass queues withdrawal work as the requester if
-none is outstanding, completes, and keeps the maintenance chain. Once it is
-`revoked`, the pass completes without scheduling more maintenance. Deploy and
+any withdrawal is `pending`, including a tool withdrawal after model revocation,
+the pass queues withdrawal work if none is outstanding, completes, and keeps the
+maintenance chain. That work checks each requester's authority. Once all withdrawals
+are `revoked`, the pass completes without scheduling more maintenance. Deploy and
 repair work that reaches the revision fails with `CREDENTIAL_WITHDRAWN` rather
 than re-attach the source. This applies only to the Harness source; deploy and
 repair work omit a withdrawn non-model source and continue. Maintenance also
@@ -313,6 +314,7 @@ attempt that exhausted its retries during a gateway outage resumes after it.
 ## Changelog
 
 - 2026-10-07 12:07: Unify imported and managed PAT authentication while preserving source ownership and existing OAuth behavior. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - be5006e62)
+- 2026-10-06 21:30: Keep tool-withdrawal recovery scheduled after model revocation without preparing the revision again. (pr-851-rebase - bb6c7449b)
 
 - 2026-10-03 18:00: Registration and update reject a Secret reference to another Namespace as an invalid request instead of not-found, as Secret bindings do. (binding-400b)
 - 2026-10-03 16:00: Report `withdrawalInProgress` so an exhausted withdrawal no longer reads as in progress; maintenance re-queues only where it is scheduled. (fix-withdrawal-exhausted)

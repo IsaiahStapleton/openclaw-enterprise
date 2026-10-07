@@ -266,18 +266,18 @@ export function createWorkerRevisionFixtures(testFile) {
           ],
         );
         for (const sourceId of operatedSources) {
-        await observerPool.query(
-          `INSERT INTO occ.iam_access_bindings
+          await observerPool.query(
+            `INSERT INTO occ.iam_access_bindings
             (id, namespace_id, identity_subject_id, group_subject_id, role_id, resource_kind, resource_id)
            VALUES ($1, $2, $3, NULL, $4, 'credential_source', $5)`,
-          [
-            `binding-${randomUUID()}`,
-            namespace.id,
-            owner.servicePrincipalId,
-            sourceRoleId,
-            sourceId,
-          ],
-        );
+            [
+              `binding-${randomUUID()}`,
+              namespace.id,
+              owner.servicePrincipalId,
+              sourceRoleId,
+              sourceId,
+            ],
+          );
         }
       }
       if (
@@ -339,7 +339,11 @@ export function createWorkerRevisionFixtures(testFile) {
         const source = await state.read((view) =>
           view.credentialSources.findCredentialSource(namespace.id, sourceId),
         );
-        credentialSources.push({ sourceId, credentialGatewayId: source.driverId, sourceType: source.type });
+        credentialSources.push({
+          sourceId,
+          credentialGatewayId: source.driverId,
+          sourceType: source.type,
+        });
       }
       const approvedHarness =
         harness ??

@@ -2586,23 +2586,22 @@ export class ControllerWorker {
   }
 
   /**
-   * Maintenance of a revision whose source was withdrawn cannot prepare it without re-attaching
-   * the source, so it only follows the withdrawal: while it is pending, the pass makes sure an
-   * attempt is queued and keeps the maintenance chain; once it is revoked, maintenance stops
-   * until a redeploy replaces the revision.
+   * A model-withdrawn revision must not be prepared again. Maintenance recovers every pending
+   * withdrawal, including tool sources, and stops only after all revocations are confirmed.
    */
   private async completeWithdrawnRevisionMaintenance(
     claim: ClaimedWork,
     revision: Readonly<AgentRevision>,
-    withdrawal: Readonly<CredentialWithdrawal>,
   ): Promise<void> {
-    const pending = withdrawal.state === "pending";
     await this.state.transactWithQueue(async (unit, queue) => {
       if ((await queue.heartbeat(claim)) === undefined) {
         throw new WorkClaimLostError();
       }
+      const pending = (
+        await unit.credentialSources.listCredentialWithdrawals(revision.namespaceId, revision.id)
+      ).filter(({ state }) => state === "pending");
       if (
-        pending &&
+        pending.length > 0 &&
         !(await unit.operations.hasOutstandingCredentialWithdrawalWork(
           revision.namespaceId,
           revision.id,
@@ -2615,12 +2614,12 @@ export class ControllerWorker {
           target: CREDENTIAL_WITHDRAWAL_TARGET,
           namespaceId: revision.namespaceId,
           resourceId: revision.id,
-          actorId: withdrawal.requestedBy,
+          actorId: pending[0]!.requestedBy,
           operationId: randomUUID(),
         });
       }
       await queue.complete(claim, { code: "CREDENTIAL_WITHDRAWN" });
-      if (pending && this.revisionMaintenanceInterval(revision) !== undefined) {
+      if (pending.length > 0 && this.revisionMaintenanceInterval(revision) !== undefined) {
         await this.enqueueMaintenance(queue, claim, revision);
       }
     }, this.queueOptions);
@@ -2919,7 +2918,7 @@ export class ControllerWorker {
           ),
         );
         if (withdrawal !== undefined) {
-          await this.completeWithdrawnRevisionMaintenance(claim, revision, withdrawal);
+          await this.completeWithdrawnRevisionMaintenance(claim, revision);
           return;
         }
       }

@@ -3241,13 +3241,11 @@ revisionTest(
 
 revisionTest(
   "non-model sources reach Compute at dispatch and a retry omits the ones withdrawn meanwhile",
-  requiresPostgres,
-  async (context) => {
-    const fixture = await setup(context);
-    const owner = await fixture.agent(
-      "withdraw-tool-sources",
-      { auth: "credential_source", nonModelSources: 2 },
-    );
+  async (fixture) => {
+    const owner = await fixture.agent("withdraw-tool-sources", {
+      auth: "credential_source",
+      nonModelSources: 2,
+    });
     const active = await fixture.revision(owner, 1);
     const [first, second] = owner.credentialSources.map(({ sourceId }) => sourceId);
     const dispatched = [];
@@ -3283,11 +3281,7 @@ revisionTest(
           return { sourceId: source.id, state: "revoked" };
         },
       },
-      () => {},
-      undefined,
-      undefined,
-      undefined,
-      withCredentialGateway,
+      { transformDrivers: withCredentialGateway },
     );
     await fixture.work(active, "succeeded", 30_000);
     await waitFor(
@@ -3399,9 +3393,7 @@ revisionTest(
 
 revisionTest(
   "each batched withdrawal is authorized by its own requester, never the claim's actor",
-  requiresPostgres,
-  async (context) => {
-    const fixture = await setup(context);
+  async (fixture) => {
     const withdrawn = [];
     const compute = {
       ...fixture.compute,
@@ -3411,7 +3403,7 @@ revisionTest(
       },
     };
     const startWorker = () =>
-      fixture.start(compute, () => {}, 50, undefined, undefined, withCredentialGateway);
+      fixture.start(compute, { convergenceTimeoutMs: 50, transformDrivers: withCredentialGateway });
     // A second operator with the actor's grants, offboarded after requesting a withdrawal.
     const offboarded = `withdraw-offboarded-${randomUUID()}`;
     await fixture.observerPool.query(
@@ -3528,15 +3520,15 @@ revisionTest(
 
 revisionTest(
   "maintenance re-queues an exhausted non-model withdrawal and keeps repairing the revision",
-  requiresPostgres,
-  async (context) => {
-    const fixture = await setup(context);
-    const owner = await fixture.agent(
-      "withdraw-tool-maintenance",
-      { auth: "credential_source", nonModelSources: 1 },
-    );
+  async (fixture) => {
+    const owner = await fixture.agent("withdraw-tool-maintenance", {
+      auth: "credential_source",
+      nonModelSources: 2,
+    });
     const active = await fixture.revision(owner, 1);
-    const toolSourceId = owner.credentialSources[0].sourceId;
+    const [toolSourceId, remainingToolSourceId] = owner.credentialSources.map(
+      ({ sourceId }) => sourceId,
+    );
     const dispatched = [];
     let revoke = false;
     await fixture.start(
@@ -3553,14 +3545,10 @@ revisionTest(
           return { sourceId: source.id, state: revoke ? "revoked" : "pending" };
         },
       },
-      () => {},
-      50,
-      undefined,
-      undefined,
-      withCredentialGateway,
+      { convergenceTimeoutMs: 50, transformDrivers: withCredentialGateway },
     );
     await fixture.work(active, "succeeded");
-    assert.deepEqual(dispatched, [[toolSourceId]]);
+    assert.deepEqual(dispatched, [[toolSourceId, remainingToolSourceId]]);
 
     // A pending tool-source withdrawal with no attempt outstanding, as an outage that
     // exhausted every attempt leaves it.
@@ -3602,7 +3590,7 @@ revisionTest(
     await runMaintenance();
     const [queued] = await withdrawalWork();
     assert.ok(queued, "maintenance must queue the pending withdrawal again");
-    assert.deepEqual(dispatched.at(-1), []);
+    assert.deepEqual(dispatched.at(-1), [remainingToolSourceId]);
 
     // After the gateway recovers, that attempt revokes the source and the chain continues.
     revoke = true;
@@ -3617,18 +3605,95 @@ revisionTest(
     assert.equal(recorded.state, "revoked");
     await runMaintenance();
     assert.equal((await withdrawalWork()).length, 1, "a revoked withdrawal is not queued again");
+
+    // A revoked model source must stop preparation, but an exhausted tool withdrawal still
+    // needs maintenance to recover after a gateway outage.
+    const modelWithdrawal = await fixture.controller.withdrawAgentCredentialSource(
+      fixture.actor.id,
+      {
+        namespaceId: fixture.namespace.id,
+        agentId: owner.id,
+        credentialSourceId: owner.harnessAuth.sourceId,
+      },
+    );
+    await waitFor("model source withdrawal to be revoked", async () => {
+      const withdrawal = await fixture.controller.readAgentCredentialWithdrawal(fixture.actor.id, {
+        namespaceId: fixture.namespace.id,
+        agentId: owner.id,
+        credentialSourceId: owner.harnessAuth.sourceId,
+      });
+      return withdrawal.state === "revoked" ? withdrawal : undefined;
+    });
+    assert.equal(modelWithdrawal.state, "pending");
+    const preparedBeforeWithdrawalRecovery = dispatched.length;
+    await fixture.stop();
+    await fixture.state.transact((unit) =>
+      unit.credentialSources.requestCredentialWithdrawal({
+        namespaceId: fixture.namespace.id,
+        agentId: owner.id,
+        revisionId: active.id,
+        credentialSourceId: remainingToolSourceId,
+        state: "pending",
+        requestedBy: fixture.actor.id,
+        requestedAt: new Date().toISOString(),
+      }),
+    );
+    revoke = false;
+    await fixture.start(
+      {
+        ...fixture.compute,
+        maintenanceIntervalMs: 3_600_000,
+        async prepareRevision(revision, revisionContext) {
+          dispatched.push((revisionContext?.credentialSources ?? []).map(({ id }) => id));
+          return fixture.compute.prepareRevision(revision, revisionContext);
+        },
+        async withdrawCredentialSource(_revision, source) {
+          return { sourceId: source.id, state: revoke ? "revoked" : "pending" };
+        },
+      },
+      { convergenceTimeoutMs: 50, transformDrivers: withCredentialGateway },
+    );
+    await runMaintenance();
+    const recovered = (await withdrawalWork()).at(-1);
+    assert.equal(
+      (await withdrawalWork()).length,
+      3,
+      "maintenance must recover the remaining tool withdrawal",
+    );
+    assert.equal(
+      dispatched.length,
+      preparedBeforeWithdrawalRecovery,
+      "a model-withdrawn revision must not be prepared",
+    );
+    revoke = true;
+    await fixture.work({ id: active.id, idempotencyKey: recovered.idempotency_key }, "succeeded");
+    await runMaintenance();
+    assert.equal(
+      (await withdrawalWork()).length,
+      3,
+      "revoked tool sources must not be queued again",
+    );
+    assert.equal(dispatched.length, preparedBeforeWithdrawalRecovery);
+    const maintenance = await fixture.observerPool.query(
+      `SELECT count(*)::integer AS count FROM occ.controller_work
+       WHERE revision_id = $1 AND state = 'queued' AND idempotency_key LIKE $2`,
+      [active.id, `agent_revision:${active.id}:maintenance:%`],
+    );
+    assert.equal(
+      maintenance.rows[0].count,
+      0,
+      "maintenance stops only after all withdrawals are revoked",
+    );
   },
 );
 
 revisionTest(
   "an Agent that loses operate on a non-model source after admission never attaches it",
-  requiresPostgres,
-  async (context) => {
-    const fixture = await setup(context);
-    const owner = await fixture.agent(
-      "tool-grant-revoked",
-      { auth: "credential_source", nonModelSources: 1 },
-    );
+  async (fixture) => {
+    const owner = await fixture.agent("tool-grant-revoked", {
+      auth: "credential_source",
+      nonModelSources: 1,
+    });
     const toolSourceId = owner.credentialSources[0].sourceId;
     const active = await fixture.revision(owner, 1);
     // The Agent principal's exact grant is removed between admission and dispatch.
@@ -3647,11 +3712,7 @@ revisionTest(
           return fixture.compute.prepareRevision(revision, revisionContext);
         },
       },
-      () => {},
-      50,
-      undefined,
-      undefined,
-      withCredentialGateway,
+      { convergenceTimeoutMs: 50, transformDrivers: withCredentialGateway },
     );
     await fixture.work(active, "failed_permanent");
     const failed = await fixture.observerPool.query(
