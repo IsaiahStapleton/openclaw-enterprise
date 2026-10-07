@@ -1316,6 +1316,7 @@ test("a stored Installation name with a line break gets the Name rule refusal", 
   assert.equal(state.worker, 1);
   assert.equal(state.version, 1);
   assert.deepEqual(await f.events(), []);
+  // The worker Pod this time: the #1556 test above reads the api Pod's value.
   const pod = JSON.parse(await readFile(join(f.evidence, "preflight-worker-pod.json"), "utf8"));
   assert.deepEqual(
     pod.spec.containers[0].env.find(
@@ -1323,6 +1324,9 @@ test("a stored Installation name with a line break gets the Name rule refusal", 
     ),
     { name: "OCC_UPGRADE_PREFLIGHT_INSTALLATION_NAME", value: JSON.stringify("Production\n") },
   );
+  assert.deepEqual(state.preflight.secrets, {});
+  assert.deepEqual(state.preflight.pods, {});
+  assert.deepEqual(state.preflight.networkpolicies, {});
 });
 
 // An OCC that returns no stored name cannot be checked, so the upgrade stops while
@@ -1354,6 +1358,7 @@ test("an Installation read without a stored name stops before any preflight Pod"
   assert.equal(state.version, 1);
   assert.deepEqual(await f.events(), []);
   // Only the NetworkPolicy and Secret were created, and both are removed again.
+  assert.deepEqual(state.preflight.pods, {});
   assert.deepEqual(state.preflight.secrets, {});
   assert.deepEqual(state.preflight.networkpolicies, {});
   assert.deepEqual(state.preflight.deleted.map((resource) => resource.split("/")[0]).sort(), [
