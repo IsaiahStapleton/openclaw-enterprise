@@ -82,6 +82,8 @@ export function nodeLogExcerpt(stdout = "", stderr = "") {
       if (raw.trim() === "") {
         continue;
       }
+      // Test the whole line for credentials before truncating it.
+      const redacted = CREDENTIAL_LINE.test(raw);
       const line = raw.slice(0, NODE_LOG_LINE_CHARS);
       const stamp = line.split(" ", 1)[0];
       const parsed = Date.parse(stamp);
@@ -91,6 +93,7 @@ export function nodeLogExcerpt(stdout = "", stderr = "") {
         stream,
         index: entries.length,
         line,
+        redacted,
         stamp: Number.isNaN(parsed) ? undefined : stamp,
       });
     }
@@ -101,14 +104,13 @@ export function nodeLogExcerpt(stdout = "", stderr = "") {
   let retries = 0;
   let firstRetry;
   let lastRetry;
-  for (const { line, stamp } of entries) {
+  for (const { line, redacted, stamp } of entries) {
     if (KUBECTL_RETRY.test(line)) {
       retries += 1;
       firstRetry ??= stamp;
       lastRetry = stamp ?? lastRetry;
       continue;
     }
-    const redacted = CREDENTIAL_LINE.test(line);
     const text = redacted ? `${stamp ? `${stamp} ` : ""}[redacted credential-bearing line]` : line;
     if (PROBLEM_LINE.test(line)) {
       problems.add(kept.length);
