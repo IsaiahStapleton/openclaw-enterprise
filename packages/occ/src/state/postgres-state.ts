@@ -2283,10 +2283,8 @@ export class PostgresPlatformState implements PlatformStateStore {
         return immutableCopy(secret);
       },
       listReferences: async (namespaceId, secretId, limit) => {
-        if ((await findSecret(namespaceId, secretId)) === undefined) {
-          return Object.freeze({ references: Object.freeze([]), truncated: false });
-        }
-        // One statement for every kind; LIMIT limit + 1 tells a full page from a truncated one.
+        // One statement for every kind, and none for a Secret that is gone or whose Namespace
+        // is deleted (as findSecret); LIMIT limit + 1 tells a full page from a truncated one.
         const found = rows(
           (
             await client.query(
@@ -2367,6 +2365,11 @@ export class PostgresPlatformState implements PlatformStateStore {
                      )
                    )
                ) AS reference
+               WHERE EXISTS (
+                 SELECT 1 FROM occ.secrets AS s
+                 JOIN occ.namespaces AS n ON n.id = s.namespace_id AND n.deleted_at IS NULL
+                 WHERE s.namespace_id = $1 AND s.id = $2
+               )
                ORDER BY reference.kind COLLATE "C", reference.id COLLATE "C"
                LIMIT $3`,
               [namespaceId, secretId, limit + 1],

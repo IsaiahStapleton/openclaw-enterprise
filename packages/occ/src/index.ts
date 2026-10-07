@@ -739,8 +739,8 @@ const RUNTIME_LOG_REQUEST_TIMEOUT_MS = 10_000;
  */
 const CREDENTIAL_REGISTRATION_FENCE_MS = 2 * CREDENTIAL_GATEWAY_TIMEOUT_MS + 10_000;
 /**
- * The most references a Secret read or delete examines. Each one costs an authorization
- * check, so the bound keeps both the response and the IAM work small.
+ * The most references a Secret read or delete examines. Each one costs authorization work,
+ * so the bound keeps both the response and the IAM work small.
  */
 const SECRET_CONSUMER_LIMIT = 50;
 const SECRET_CONSUMER_KINDS = Object.freeze([
@@ -6608,8 +6608,10 @@ export class OpenClawController {
 
   /**
    * The current references to a Secret, named only where the caller may read the
-   * referencing resource; the rest are counted. One query, then one authorization check per
-   * examined reference, at most SECRET_CONSUMER_LIMIT of them.
+   * referencing resource; the rest are counted. One reference query examines at most
+   * SECRET_CONSUMER_LIMIT references. Each costs one `read` decision, except a pending
+   * provisioning request: one record read, then, for its own actor only, the decisions its
+   * status read makes. Identical decisions are made once per call.
    */
   private async secretConsumers(
     state: Pick<PlatformReadView, "secrets" | "provisioning">,
@@ -6625,15 +6627,31 @@ export class OpenClawController {
       provisioningRequests: [],
     };
     let unreadable = 0;
+    const decisions = new Map<string, boolean>();
+    const allowed = async (
+      action: AuthorizationRequest["action"],
+      resource: ResourceRef,
+    ): Promise<boolean> => {
+      const key = JSON.stringify([action, resource.kind, resource.namespaceId, resource.id]);
+      let decision = decisions.get(key);
+      if (decision === undefined) {
+        decision = (await this.authorizationDecision(principalId, action, resource)).decision
+          .allowed;
+        decisions.set(key, decision);
+      }
+      return decision;
+    };
     for (const reference of page.references) {
       const readable =
         reference.kind === "provisioning_request"
-          ? await this.canReadProvisioningRequest(state, principalId, namespaceId, reference.id)
-          : await this.canRead(principalId, {
-              kind: reference.kind,
-              id: reference.id,
+          ? await this.canReadProvisioningRequest(
+              state,
+              principalId,
               namespaceId,
-            });
+              reference.id,
+              allowed,
+            )
+          : await allowed("read", { kind: reference.kind, id: reference.id, namespaceId });
       if (!readable) {
         unreadable += 1;
         continue;
@@ -6661,6 +6679,7 @@ export class OpenClawController {
     principalId: string,
     namespaceId: string,
     workId: string,
+    allowed: (action: AuthorizationRequest["action"], resource: ResourceRef) => Promise<boolean>,
   ): Promise<boolean> {
     const record = await state.provisioning.findByWorkId(workId);
     if (
@@ -6718,7 +6737,7 @@ export class OpenClawController {
         : []),
     ];
     for (const [action, resource] of checks) {
-      if (!(await this.authorizationDecision(principalId, action, resource)).decision.allowed) {
+      if (!(await allowed(action, resource))) {
         return false;
       }
     }

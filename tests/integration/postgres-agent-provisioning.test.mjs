@@ -1500,6 +1500,65 @@ test(
 );
 
 test(
+  "a provisioning request its actor may no longer read is counted, never named, as a Secret consumer",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const fixture = await createFixture(context);
+    const namespace = await fixture.bootstrapNamespace();
+    const secrets = await createProvisioningSecrets(fixture, namespace.id);
+    // No worker runs, so the request stays queued and keeps referencing both Secrets.
+    const admitted = await fixture.request("POST", `/namespaces/${namespace.id}/agents/provision`, {
+      body: provisioningBody(namespace.id, secrets),
+    });
+    assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
+    const { workId } = admitted.data.provisioning;
+    const secretPath = `/namespaces/${namespace.id}/secrets/${secrets.modelKey.id}`;
+    assert.deepEqual(
+      (await fixture.request("GET", secretPath)).data.consumers.provisioningRequests,
+      [workId],
+    );
+
+    // A status read needs Agent create in the Namespace. Once a Restriction denies it, the
+    // actor still reads and may delete the Secret, but no longer sees the request: it is only
+    // counted, and the filtering is not itself a denied operation (no 403, no denial audit).
+    await fixture.pool.query(
+      `INSERT INTO occ.iam_restrictions (id, namespace_id, action, resource_kind, resource_id)
+       VALUES ($1, $2, 'create', 'agent', NULL)`,
+      [`restriction_${randomUUID()}`, namespace.id],
+    );
+    const denials = async () =>
+      (
+        await fixture.pool.query(
+          "SELECT count(*)::int AS count FROM occ.audit_events WHERE namespace_id = $1 AND outcome = 'denied'",
+          [namespace.id],
+        )
+      ).rows[0].count;
+    const denialsBefore = await denials();
+    const read = await fixture.request("GET", secretPath);
+    assert.equal(read.status, 200, JSON.stringify(read.body));
+    assert.deepEqual(read.data.consumers, {
+      agents: [],
+      configurations: [],
+      credentialSources: [],
+      provisioningRequests: [],
+      unreadable: 1,
+      truncated: false,
+    });
+    const refused = await fixture.request("DELETE", secretPath);
+    assert.equal(refused.status, 409, JSON.stringify(refused.body));
+    assert.equal(
+      refused.body.error.message,
+      "The Secret is still referenced by 1 resource you cannot read. Remove those references first.",
+    );
+    for (const body of [read.body, refused.body]) {
+      assert.doesNotMatch(JSON.stringify(body), new RegExp(workId));
+    }
+    const denialsAfter = await denials();
+    assert.equal(denialsAfter, denialsBefore);
+  },
+);
+
+test(
   "a Plugin Driver switch leaves the provisioning status readable; retry still refuses the plan",
   { ...requiresPostgres, timeout: 60_000 },
   async (context) => {
