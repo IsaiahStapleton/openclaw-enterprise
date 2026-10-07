@@ -1097,7 +1097,8 @@ test("Installation Preset JSON files resolve beside startup YAML and fail closed
     },
   };
   const relativeConfiguration = installation();
-  // Entries are trimmed before they resolve, so YAML padding does not change the path.
+  // Entries are trimmed before they resolve, so whitespace inside a quoted YAML entry does not
+  // change the path.
   relativeConfiguration.presets = {
     includeDefaults: false,
     files: ["  presets/from-file.json\t"],
