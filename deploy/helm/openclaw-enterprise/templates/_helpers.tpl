@@ -1,3 +1,5 @@
+{{- /* One IPv4 host. Go's ParseCIDR rejects an octet above 255 and a leading zero. */ -}}
+{{- define "openclaw.ipv4Host32" -}}^(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])){3}/32${{- end -}}
 {{- define "openclaw.validate" -}}
 {{- if hasKey .Values "integrations" -}}{{- fail "integrations is retired; configure ChatGPT packaging under backend.chatgpt" -}}{{- end -}}
 {{- if hasKey .Values "workspaceFiles" -}}{{- fail "workspaceFiles is retired; configure private Envoy Gateway routing under gatewayRouting" -}}{{- end -}}
@@ -195,7 +197,7 @@ an allowlist without its provider is refused: the API treats it as a startup err
 {{- fail (printf "%s.cidrs must contain at least one explicit IPv4 /32 host" $name) -}}
 {{- end -}}
 {{- range $index, $cidr := $cidrs -}}
-{{- if not (regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/32$" $cidr) -}}
+{{- if not (regexMatch (include "openclaw.ipv4Host32" .) $cidr) -}}
 {{- fail (printf "%s.cidrs[%d] must identify exactly one IPv4 host with /32" $name $index) -}}
 {{- end -}}
 {{- end -}}
