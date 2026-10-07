@@ -79,7 +79,9 @@ an allowlist someone who left can still sign in, and live sessions continue unti
 expire (at most 8 hours). Offboarding also means acting in OCE
 ([account controls](#session-and-recovery-controls)): disable the account to end all
 access and its sessions, or detach its GitHub method to end GitHub sign-in and all its
-sessions; revoke ends sessions but allows a fresh sign-in.
+sessions; revoke ends sessions but allows a fresh sign-in. None of these ends a
+[service key](service-api-keys.md#revoke-or-rotate-a-service-key) the person uses
+from the CLI: revoke it, or delete its service principal's AccessBindings.
 
 `GET /api/auth/providers` returns `github`, `google`, `oidc`, and `sessionBinding` as `true` when enabled,
 with `oidcSignIn` (`label`, `authorizationUrl`) while OIDC is configured,
