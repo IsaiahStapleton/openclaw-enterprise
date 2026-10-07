@@ -71,10 +71,11 @@ when the HTTP caller disconnects. OpenClaw loads the Slack plugin only for a
 Configuration with a Slack channel, so for an Agent without one the Gateway
 refuses the call as an unknown channel; that refusal maps to configuration
 `failed` with `NOT_CONFIGURED`. The probe code is part of the Gateway Pod
-specification, so a revision deployed by an older controller keeps its
-mapping (three `PROBE_FAILED` checks) until the Agent is redeployed. Transport failures return `UNAVAILABLE`; other
-RPC failures return `PROBE_FAILED`. Both produce unknown checks; local
-configuration is not substituted for the live response. The Agent container
+specification, so a revision deployed by an earlier controller keeps the
+earlier mapping (three unknown `PROBE_FAILED` checks) until the Agent is
+redeployed. Transport failures return `UNAVAILABLE`; other RPC failures return
+`PROBE_FAILED`. Both produce unknown checks; local configuration is not
+substituted for the live response. The Agent container
 currently returns no channel checks.
 
 ### 3. Return validated evidence

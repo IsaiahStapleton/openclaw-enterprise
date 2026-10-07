@@ -172,7 +172,7 @@ no worker exists in the ordinary container list. It rejects a non-restartable
 init worker or ambiguous placement. It retries authenticated OCC access and verifies the same Installation ID. A
 controller-only release then ends without requesting Agent deployments.
 Existing revisions keep the Pod specification of the controller that deployed
-them, so controller fixes to Agent Pods, such as
+them, so controller fixes to Gateway and Agent Pods, such as
 [diagnostics](agent-deployment-diagnostics.md) mappings, reach an Agent only at
 its next deployment.
 
