@@ -156,7 +156,7 @@ helm template oce deploy/helm/openclaw-enterprise -f /secure/occ/values.yaml > /
 The upgrade command also renders the chart and runs its
 [startup preflight](production-upgrade.md#upgrade-the-control-plane) before it
 stops OCC, so it stops on every row below while the old release keeps serving.
-`helm template` cannot check the last two rows, which the API and worker read
+`helm template` cannot check the last three rows, which the API and worker read
 from the Installation, and a Compose install has no chart. A plain
 `helm upgrade` runs the migration Job before the API and worker fail on those
 rows, and the old release must not then start against the migrated database,
@@ -177,8 +177,10 @@ correction keeps the behavior the old release already had.
 | An IPv6 `api.trustedProxy.cidrs` entry that contains `::ffff:0:0/96`, such as `::ffff:0:0/96`, `::ffff:a00:0/64` or `::/64`       | Such an entry trusted forwarded headers from every IPv4 peer. List your proxies' own CIDRs instead; this changes behavior.                                                                                      |
 | A Unicode `auth.baseUrl` host, such as `https://bücher.example.com`, with a punycode `agentNativeAdmin.sharedCookieDomain`        | Write the host in punycode: `https://xn--bcher-kva.example.com`.                                                                                                                                                |
 | An `auth.baseUrl` with a `/.` or `/%2e` path, a short loopback such as `http://127.1`, or U+200B (zero-width space)               | Remove the path and invisible characters; write `127.0.0.1`.                                                                                                                                                    |
+| An `auth.baseUrl` with a path or query, such as `https://example.com/occ`                                                         | Serve OCC at the root of its own origin and set that origin, such as `https://occ.example.com`. This changes behavior: update the redirect URI registered with each sign-in provider.                           |
 | A `presets.files` Preset `name` with leading or trailing Unicode spaces (such as U+00A0), U+2028, U+2029 or C1 control characters | Correct the `name` in the file, or remove the entry. Startup adds a Preset with the corrected name; delete any saved copy with the old name you no longer need.                                                 |
 | A Backend `id` with a C1 control character (U+0080 to U+009F)                                                                     | Rename the Backend. No Agent can store such an ID, but ServiceAccounts created through that Backend keep it in a binding that cannot change: delete them before the rename and recreate them after the upgrade. |
+| An upper-case image digest in the Installation's `drivers.compute.configuration.images`, such as `@sha256:ABC…` or `@SHA256:`     | Write `sha256` and the hex digits in lower case; the digest is the same.                                                                                                                                        |
 
 ## Roll back across human sign-in
 

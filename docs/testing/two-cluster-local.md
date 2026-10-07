@@ -256,3 +256,25 @@ and supersedes their reconciliation before preparing a successor, so this profil
 uses the main Driver's Agent-owned policy with an exact-revision Pod selector.
 The refreshed test verifies the rejected Harness is gone and the policy selects
 only the corrected successor; earlier results do not establish this acceptance.
+
+## Upgrade the execution chart
+
+The [image upgrade command](../guides/deploy/production-upgrade.md) upgrades only
+the control-plane `openclaw-enterprise` release. Releases after 2026-09-28
+also need newer `openclaw-execution` grants: Pod `patch` for the tenant worker
+role, and Pod, `pods/proxy`, `pods/log` and Event reads for the tenant API role.
+Without them, workspace node updates to running Harness and Gateway Pods fail
+with a Kubernetes `403`, and log reads return `503 RUNTIME_LOGS_CLUSTER_RBAC`.
+
+Upgrade the execution release first, from the candidate checkout and with the
+values it was installed with, while the old controller still runs:
+
+```bash
+helm upgrade <execution-release> deploy/helm/openclaw-execution \
+  --kube-context <execution-context> --namespace <execution-system-namespace> \
+  -f <execution-values.yaml>
+```
+
+The new chart only widens grants and DNS egress, so the old controller keeps
+working, and existing tenant RoleBindings to its roles receive the new rules. Keep `agentRuntimeLogs.enabled`
+equal to the control-plane chart's value. Then run the image upgrade command.
