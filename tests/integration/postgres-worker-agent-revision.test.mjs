@@ -5363,6 +5363,7 @@ revisionTest(
       releaseActivation = resolve;
     });
     let activationStarted = false;
+    const stoppedRevisions = [];
     const retiredRevisions = [];
     await fixture.start({
       ...fixture.compute,
@@ -5373,6 +5374,10 @@ revisionTest(
           await activationReleased;
         }
       },
+      async stopRevision(revision) {
+        stoppedRevisions.push(revision.id);
+        return fixture.compute.stopRevision(revision);
+      },
       async retireRevision(revision) {
         retiredRevisions.push(revision.id);
         return fixture.compute.retireRevision(revision);
@@ -5382,14 +5387,21 @@ revisionTest(
       activationStarted ? true : undefined,
     );
 
-    const stop = await fixture.requestStop(owner);
-    releaseActivation();
+    let stop;
+    try {
+      stop = await fixture.requestStop(owner);
+    } finally {
+      releaseActivation();
+    }
     await fixture.work(candidate, "succeeded");
     await fixture.work(stop, "succeeded");
 
     const stopped = await fixture.currentAgent(owner);
     assert.equal(stopped.desiredRuntimeState, "stopped");
     assert.equal(stopped.activeRevisionId, undefined);
+    // The candidate stops itself. The stop work then stops the still-serving predecessor
+    // first and cleans up the candidate after it.
+    assert.deepEqual(stoppedRevisions, [candidate.id, predecessor.id, candidate.id]);
     assert.deepEqual(retiredRevisions, []);
     const status = await fixture.deploymentStatus(owner, candidate);
     assert.equal(status.status, "failed");
