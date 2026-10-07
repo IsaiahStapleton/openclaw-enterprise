@@ -1440,11 +1440,26 @@ test(
     assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
     const secretPath = (secret) => `/namespaces/${namespace.id}/secrets/${secret.id}`;
 
-    // Queued: no Configuration or Agent names these Secrets yet, only the accepted plan.
+    // Queued: no Configuration or Agent names these Secrets yet, only the accepted plan. Its
+    // actor, who holds the grants a status read checks, sees the request as a consumer.
+    const { workId } = admitted.data.provisioning;
     for (const secret of [secrets.slackBotToken, secrets.modelKey]) {
       const refused = await fixture.request("DELETE", secretPath(secret));
       assert.equal(refused.status, 409, JSON.stringify(refused.body));
-      assert.match(refused.body.error.message, /pending Agent provisioning request/);
+      assert.equal(
+        refused.body.error.message,
+        `The Secret is still referenced by pending Agent provisioning request ${workId}. Remove those references, or let provisioning finish, first.`,
+      );
+      const read = await fixture.request("GET", secretPath(secret));
+      assert.equal(read.status, 200, JSON.stringify(read.body));
+      assert.deepEqual(read.data.consumers, {
+        agents: [],
+        configurations: [],
+        credentialSources: [],
+        provisioningRequests: [workId],
+        unreadable: 0,
+        truncated: false,
+      });
     }
 
     await fixture.startWorker();

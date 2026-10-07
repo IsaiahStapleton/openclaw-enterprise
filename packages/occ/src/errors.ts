@@ -291,7 +291,11 @@ const SECRET_CONSUMER_LABELS = [
   ["agents", "Agent", "Agents"],
   ["configurations", "Configuration", "Configurations"],
   ["credentialSources", "credential source", "credential sources"],
-  ["provisioningRequests", "Agent provisioning request", "Agent provisioning requests"],
+  [
+    "provisioningRequests",
+    "pending Agent provisioning request",
+    "pending Agent provisioning requests",
+  ],
 ] as const satisfies readonly (readonly [keyof SecretConsumers, string, string])[];
 
 /** The HTTP error contract caps messages at 256 characters. */
