@@ -131,8 +131,9 @@ test(
       `allow-gateway-channels-${suffix}`,
       topology.gatewayPlacement,
     );
+    // NetworkPolicy scopes its Pod selector to the owning Kubernetes namespace.
+    assert.equal(policy.metadata.namespace, topology.gatewayPlacement);
     assert.deepEqual(policy.spec.podSelector.matchLabels, {
-      "openclaw.dev/namespace": topology.agent.namespaceId,
       "openclaw.dev/network-profile": "broad-egress-v1",
       "openclaw.dev/workload-role": "gateway",
       "openclaw.dev/agent": topology.agent.id,
