@@ -93,9 +93,9 @@ exchange and resolves the immutable numeric GitHub user ID's exact enrollment.
 Unknown identities fail without signup. Success returns to exactly `/console/`
 and sets a two-minute HttpOnly, `SameSite=Strict` login receipt; failure returns
 to `/console/?authError=github` without automatic retry. An identity attached to a
-disabled account returns with `authReason=account-disabled`, audited as `ACCOUNT_DISABLED`;
-only the person the provider just authenticated reaches it, and every other refusal stays
-generic. The starting tab sends its
+disabled account returns with `authReason=account-disabled`, audited as `ACCOUNT_DISABLED`
+with the account's `userId`; only the person the provider just authenticated reaches it,
+and every other refusal stays generic. The starting tab sends its
 `attemptId` with the configured Origin to `POST /api/auth/providers/github/result`,
 which returns the callback session's `sessionKey` once, only while that session's
 cookie is current. It never issues or extends a session.
