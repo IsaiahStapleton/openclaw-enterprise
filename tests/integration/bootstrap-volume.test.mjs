@@ -398,7 +398,8 @@ test("prepare-bootstrap-volume preserves YAML-scalar namespace names as strings"
   }
 });
 
-test("prepare-bootstrap-volume preserves YAML-scalar node selector keys", async (t) => {
+test("prepare-bootstrap-volume preserves YAML-scalar node selector keys and values", async (t) => {
+  // Each key is also its value, so neither side of a selector may be left unquoted.
   const keys = ["null", "yes", "on", "1e3", "0x10", "010"];
   const { directory, kubeconfig, manifestPath } = await fixture(t);
   await execute(
@@ -414,13 +415,10 @@ test("prepare-bootstrap-volume preserves YAML-scalar node selector keys", async 
       "claim",
       "--image",
       image,
-      ...keys.flatMap((key) => ["--node-selector", `${key}=control`]),
+      ...keys.flatMap((key) => ["--node-selector", `${key}=${key}`]),
     ],
     { cwd: repository, env: { PATH: `${directory}:${process.env.PATH}` } },
   );
   const manifest = loadYaml(await readFile(manifestPath, "utf8"));
-  assert.deepEqual(
-    manifest.spec.nodeSelector,
-    Object.fromEntries(keys.map((key) => [key, "control"])),
-  );
+  assert.deepEqual(manifest.spec.nodeSelector, Object.fromEntries(keys.map((key) => [key, key])));
 });

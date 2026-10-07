@@ -3,6 +3,8 @@ package occdev
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -161,4 +163,115 @@ exec sleep 30
 	if got := importCalls(t, filepath.Join(directory, "calls")); len(got) != 1 {
 		t.Fatalf("a canceled import was retried: %d imports", len(got))
 	}
+}
+
+// flakyK3dImportCase is a fakeProfileCommands case for `k3d image import
+// --mode direct <archive> -c <cluster>`. Unlike fakeK3dImport, it can fail each
+// attempt differently and check the archive the caller saved: every call first
+// checks that the archive is still there, the first call then fails with k3d's
+// closed-stream error, and later calls fail with laterFailure or, when it is
+// empty, succeed.
+func flakyK3dImportCase(t *testing.T, cluster, laterFailure string) string {
+	t.Helper()
+	directory := t.TempDir()
+	closed := filepath.Join(directory, "closed-stream")
+	laterFailureOutput := filepath.Join(directory, "later-failure")
+	if err := os.WriteFile(closed, []byte(k3dClosedStreamOutput+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(laterFailureOutput, []byte(laterFailure), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	marker := shellQuote(filepath.Join(directory, "failed-once"))
+	return `"image import --mode direct "*" -c ` + cluster + `")
+  [ -s "$5" ] || { echo "archive missing at import: $5" >&2; exit 2; }
+  if [ ! -e ` + marker + ` ]; then : > ` + marker + `; cat ` + shellQuote(closed) + ` >&2; exit 1; fi
+  if [ -s ` + shellQuote(laterFailureOutput) + ` ]; then cat ` + shellQuote(laterFailureOutput) + ` >&2; exit 1; fi
+  echo "INFO[0001] Successfully imported image(s)" ;;`
+}
+
+// assertRetriedImport checks that the archive was imported twice, that the
+// imported image was looked up only after the import that succeeded, and that
+// the archive was removed afterwards.
+func assertRetriedImport(t *testing.T, commands []string, archive, cluster, stdout string) {
+	t.Helper()
+	importCall := "k3d image import --mode direct " + archive + " -c " + cluster
+	imports, lastImport, list := 0, -1, -1
+	for index, command := range commands {
+		switch {
+		case command == importCall:
+			imports++
+			lastImport = index
+		case strings.HasSuffix(command, " ctr -n k8s.io images list"):
+			list = index
+		}
+	}
+	if imports != 2 || list < lastImport {
+		t.Fatalf("expected two imports of %s before the image lookup:\n%s", archive, strings.Join(commands, "\n"))
+	}
+	if !strings.Contains(stdout, "retrying (attempt 2 of 3)") || !strings.Contains(stdout, "Successfully imported image(s)") {
+		t.Fatalf("the retry or k3d's own output was hidden: %q", stdout)
+	}
+	if _, err := os.Stat(archive); !os.IsNotExist(err) {
+		t.Fatalf("the image archive was left behind: %v", err)
+	}
+}
+
+func TestImportArchiveDirectDoesNotRetryAnotherFailureAfterAClosedStream(t *testing.T) {
+	// Each attempt is judged on its own output: a second attempt that fails for
+	// another reason must not be retried because the first one lost its stream.
+	archive := filepath.Join(t.TempDir(), "development-import.tar")
+	if err := os.WriteFile(archive, []byte("archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	commands := fakeProfileCommands(t, map[string]string{
+		"k3d": flakyK3dImportCase(t, "occ-dev-1", "ERRO[0000] failed to import images in node 'k3d-occ-dev-1-server-0': Exec process in node 'k3d-occ-dev-1-server-0' failed with exit code '1'\n"),
+	})
+	var stdout bytes.Buffer
+	r := newRunner(Options{Out: &stdout})
+
+	if err := r.importArchiveDirect(context.Background(), archive, "occ-dev-1"); err == nil {
+		t.Fatal("a failed import was reported as success")
+	}
+	if got := commands(); len(got) != 2 {
+		t.Fatalf("expected the closed stream retried once and nothing more: %q", got)
+	}
+	if strings.Count(stdout.String(), "retrying") != 1 {
+		t.Fatalf("expected one retry notice: %q", stdout.String())
+	}
+}
+
+func TestDevelopmentImageImportRetriesAClosedStreamAndVerifiesTheDigest(t *testing.T) {
+	state := kubernetesOnlyOpenShellState(t)
+	image := "ghcr.io/openclaw/runtime@" + profileTestDigest
+	// The staging name mirrors importDevelopmentImage on purpose, so the tag
+	// that reaches the cluster is pinned.
+	sum := sha256.Sum256([]byte(image))
+	staging := fmt.Sprintf("openclaw-development/import-%x:%s", sum[:6], state.Cluster)
+	recorded := "localhost/" + staging
+	reference := strings.TrimSuffix(recorded, ":"+state.Cluster) + "@" + profileTestDigest
+	server := "k3d-" + state.Cluster + "-server-0"
+	commands := fakeProfileCommands(t, map[string]string{
+		"podman": `"image inspect ` + staging + `") exit 1 ;;
+"tag ` + image + ` ` + staging + `") ;;
+"image inspect --format {{json .RepoTags}} ` + staging + `") echo '["` + recorded + `"]' ;;
+"image inspect --format {{.Os}}/{{.Architecture}} ` + recorded + `") echo linux/amd64 ;;
+"image save --output "*" ` + recorded + `") printf archive > "$4" ;;
+"exec ` + server + ` ctr -n k8s.io images list") echo "` + recorded + ` application/vnd.oci.image.manifest.v1+json ` + profileTestDigest + `" ;;
+"exec ` + server + ` ctr -n k8s.io images tag ` + recorded + ` ` + reference + `") ;;
+"image rm ` + recorded + `") ;;`,
+		"k3d": flakyK3dImportCase(t, state.Cluster, ""),
+	})
+	var stdout bytes.Buffer
+	r := newRunner(Options{Repository: state.Repository, Out: &stdout})
+	r.engine = "podman"
+
+	got, err := r.importDevelopmentImage(context.Background(), state, image)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, strings.Join(commands(), "\n"))
+	}
+	if got != reference {
+		t.Fatalf("unexpected runtime reference: %q", got)
+	}
+	assertRetriedImport(t, commands(), filepath.Join(state.directory, "development-import.tar"), state.Cluster, stdout.String())
 }
