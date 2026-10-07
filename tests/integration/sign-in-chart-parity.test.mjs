@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -1208,6 +1208,7 @@ test(
     const unicodeEdge =
       /auth\.baseUrl must not begin or end with Unicode spaces or invisible characters/;
     const unicodeInside = /auth\.baseUrl must not contain spaces, invisible characters, < or >/;
+    const compatibility = /auth\.baseUrl must not contain compatibility characters/;
     const cases = [
       ...[
         "https://console.oce.example.internal/occ",
@@ -1303,6 +1304,18 @@ test(
         api: accepted,
         job: accepted,
       })),
+      // The host parser maps compatibility characters first and refuses those that map to a
+      // forbidden host code point (full-width ? # / @, ?? from U+2047) or that UTS #46 disallows
+      // (U+2488 maps to "1.", U+FFFD). Go's URL parser keeps them. A sample here; the next test
+      // checks the chart's whole list against Node.
+      ...["\uff1f", "\uff03", "\uff0f", "\uff20", "\ufe56", "\u2047", "\u2488", "\ufffd"].map(
+        (character) => ({
+          baseUrl: `https://console${character}.oce.example.internal`,
+          chart: compatibility,
+          api: false,
+          job: false,
+        }),
+      ),
       ...[
         "https://\u0646\u0627\u0645\u0647\u200c\u0627\u06cc.oce.example.internal",
         "https://\u0915\u094d\u200d\u0937.oce.example.internal",
@@ -1372,6 +1385,50 @@ test(
     );
   },
 );
+
+// The chart refuses a listed set of compatibility characters ($baseUrlHostRefused) that the API's
+// URL parser refuses in a host. This re-derives the list from Node: of the non-ASCII letters,
+// marks, numbers, punctuation and symbols (what the chart's other Unicode checks let through),
+// exactly those that URL parsing refuses in every host context tried are listed. The contexts
+// put Latin, Arabic, Hebrew and virama neighbours on each side, in every label position, so a
+// character refused only by the Bidi or joiner rules, or at a label start, is never listed.
+// JavaScript's Unicode tables can be newer than Go's: a listed code point that Go's RE2 reads as
+// unassigned is refused by the chart's earlier check instead, which is harmless.
+test("the chart lists exactly the compatibility characters the API's URL parser refuses in a host", async () => {
+  const helpers = await readFile(
+    join(repository, "deploy/helm/openclaw-enterprise/templates/_helpers.tpl"),
+    "utf8",
+  );
+  const [, source] = helpers.match(/\$baseUrlHostRefused := "(\[[^"]+\])"/) ?? [];
+  assert.ok(source, "_helpers.tpl defines $baseUrlHostRefused");
+  const listed = new RegExp(source.replaceAll("\\\\x{", "\\u{"), "u");
+  const parses = (host) => URL.canParse(`https://${host}`);
+  const labels = (character) =>
+    ["", "a", "\u0627", "\u05d0", "\u0915\u094d"].flatMap((before) =>
+      ["", "a", "\u0627", "\u05d0"].map((after) => `${before}${character}${after}`),
+    );
+  const refusedEverywhere = (character) =>
+    !labels(character).some((label) =>
+      [label, `${label}.example`, `example.${label}`, `${label}.\u0627`].some(parses),
+    );
+  const missing = [];
+  const extra = [];
+  let count = 0;
+  // Surrogates are category Cs, so the property test skips them.
+  for (let codePoint = 0x80; codePoint <= 0x10ffff; codePoint++) {
+    const character = String.fromCodePoint(codePoint);
+    if (/[\p{L}\p{M}\p{N}\p{P}\p{S}]/u.test(character)) {
+      const isListed = listed.test(character);
+      count += isListed ? 1 : 0;
+      if (refusedEverywhere(character) !== isListed) {
+        const hex = `U+${codePoint.toString(16).toUpperCase().padStart(4, "0")}`;
+        (isListed ? extra : missing).push(hex);
+      }
+    }
+  }
+  assert.ok(count > 0, "the list matches no letter, mark, number, punctuation or symbol");
+  assert.deepEqual({ missing, extra }, { missing: [], extra: [] });
+});
 
 // The chart's sign-in checks read the scheme as URL parsing does, like the API: an uppercase
 // HTTPS origin, or one with surrounding spaces, passes for GitHub, Google and OIDC. Plain HTTP
