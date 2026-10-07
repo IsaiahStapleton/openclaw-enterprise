@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { isIP } from "node:net";
 import test from "node:test";
+import { verifySingleSlackDelivery } from "../helpers/slack-delivery.mjs";
+import { sessionEvidenceScript } from "../helpers/normal-agent-tools.mjs";
 import {
   arrangeProductionTopology,
   assertDeniedConnection,
@@ -14,7 +16,7 @@ import {
 } from "../helpers/harness-topology-k3d-real.mjs";
 
 test(
-  "production k3d Slack isolates channel credentials and connects through its approved proxy",
+  "production k3d gateway replies once to a real Slack message through its approved proxy and Codex Agent",
   { ...requiresLiveSlack, timeout: 780_000 },
   async (context) => {
     for (const key of [
@@ -164,8 +166,75 @@ test(
       );
       return /\[?slack\]?\s+socket mode connected/i.test(logs) || undefined;
     });
+    // TODO: retire this delivery caller after the protected QA matrix lane is qualified.
+    // Keep the focused lane's acceptance coverage during the transition, without resends.
+    await verifySingleSlackDelivery({
+      slack,
+      gatewayIdentity,
+      senderIdentity,
+      replyMode: "root",
+      nativeEvidence: async (nonce) => {
+        const execGateway = (...args) =>
+          kubectl(
+            "exec",
+            topology.gatewayPod.metadata.name,
+            "--namespace",
+            topology.gatewayPlacement,
+            "--",
+            ...args,
+          );
+        const probe =
+          "const{DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('/home/node/.openclaw/agents/main/agent/openclaw-agent.sqlite',{readOnly:true});console.log(JSON.stringify(d.prepare('SELECT session_key FROM session_nodes').all().map(x=>x.session_key)));d.close()";
+        const keys = JSON.parse(await execGateway("node", "-e", probe));
+        const matches = [];
+        for (const key of keys.filter((key) => key.includes("slack"))) {
+          const proof = JSON.parse(
+            await execGateway(
+              "node",
+              "-e",
+              sessionEvidenceScript,
+              key,
+              nonce,
+              "",
+              nonce,
+              JSON.stringify({ toolNames: [] }),
+            ),
+          );
+          if (!proof.userMarkerSeen || !proof.terminalAssistantMarkerSeen) {
+            continue;
+          }
+          const turns = (proof.codexTurns ?? []).filter(
+            (turn) => turn.promptSeen && turn.terminalAssistantSeen,
+          );
+          if (turns.length === 0) {
+            continue;
+          }
+          assert.equal(
+            turns.length,
+            1,
+            "one ingress must correlate with one completed native Codex turn",
+          );
+          matches.push({
+            sessionKey: key,
+            sessionId: proof.sessionId,
+            nativeTurnPrefix: turns[0].turnPrefix,
+          });
+        }
+        assert.equal(
+          matches.length,
+          1,
+          "the exact gateway must persist the Slack prompt and one completed native Codex response",
+        );
+        assert.equal(
+          (await resource("pod", topology.gatewayPod.metadata.name, topology.gatewayPlacement))
+            .metadata.uid,
+          topology.gatewayPod.metadata.uid,
+        );
+        return matches[0];
+      },
+    });
     context.diagnostic(
-      "Channel credentials, approved proxy isolation, and authenticated Socket Mode verified. Single-message delivery belongs to qa-matrix-real.test.mjs.",
+      "Channel credential isolation, approved proxy, and single-message native Codex Slack delivery verified.",
     );
   },
 );

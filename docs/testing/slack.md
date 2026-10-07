@@ -1,8 +1,9 @@
 # Slack tests
 
 Use the [shipped QA matrix](qa-matrix.md) for single-message live Slack ingress and a
-gateway-authored threaded reply through dedicated Codex. The focused suite below
-retains credential-placement, proxy-isolation, and Socket Mode checks.
+gateway-authored threaded reply through dedicated Codex. Until the protected matrix
+lane is qualified, the focused suite below also retains single-message delivery,
+credential-placement, proxy-isolation, and Socket Mode checks.
 Prepare the [Kubernetes runtime setup](kubernetes.md#kubernetes-model-turns-and-secrets)
 and [private credential file](README.md#requirements-and-credentials) first.
 
@@ -26,8 +27,9 @@ OCC_TEST_SLACK_LIVE=1 \
   node --env-file="$TEST_ENV_FILE" --test tests/integration/harness-topology-k3d-slack-real.test.mjs
 ```
 
-This focused test verifies credential placement and the authenticated connection.
-The QA matrix posts real messages and verifies exact runtime/session evidence. The sender bot must differ from the
+Both suites post one real message and verify its response, exact native session,
+and absence of delayed duplicate replies. They leave messages in the test channel.
+Run them serially so Socket Mode consumers do not compete. The sender bot must differ from the
 Agent bot; its credential remains with the test runner. Run this file and the
 ordinary runtime file for both coverage groups. See [Slack test settings](#slack-test-environment).
 
@@ -43,8 +45,9 @@ channel. `requireMention` stays enabled. Do not enable bot access account-wide.
 `OCC_TEST_SLACK_LIVE=1` enables
 [`harness-topology-k3d-slack-real.test.mjs`](../../tests/integration/harness-topology-k3d-slack-real.test.mjs).
 Run the ordinary runtime file separately for its coverage. The Slack case uses the same production k3d,
-PostgreSQL, image, and model prerequisites. Delivery and duplicate observation
-belong to the QA matrix, which leaves its messages in the authorized channel.
+PostgreSQL, image, and model prerequisites. It retains root-reply delivery and
+duplicate observation until the protected QA lane is qualified; the matrix also
+checks threaded replies and native outbound messages.
 
 | Variable                          | Requirement                                                                                |
 | --------------------------------- | ------------------------------------------------------------------------------------------ |
