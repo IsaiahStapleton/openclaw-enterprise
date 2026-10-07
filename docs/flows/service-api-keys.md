@@ -158,8 +158,9 @@ required dependencies fail closed with `503`. An allowed read returns the
 Namespace response through the existing OCC API envelope. Other resource
 operations retain their own OCC authorization and mutation-audit behavior;
 key admission does not bypass them. Admission keeps the verified key's ID, and
-every audit event for the request, including a denial, records it as
-`details.actorServiceKeyId` beside the service-principal actor.
+every route audit event built for the request (change, audited read, or denial)
+records it as `details.actorServiceKeyId`. Events OCC appends for the work
+itself, such as `openclaw.agents.provision`, carry only the principal.
 
 ### 5. Delete the credential and record revocation
 

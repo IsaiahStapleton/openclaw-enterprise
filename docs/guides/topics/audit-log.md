@@ -18,9 +18,9 @@ Agent's own service principal is refused, the event has reason code
 `AGENT_PRINCIPAL_NOT_AUTHORIZED` and its details name that principal and the
 refused grant. Other refusals record nothing, such as `401` for a missing
 credential or `400` for an invalid request, even after authorization passed. For
-example, service API key issuance and revocation record the administrator, the
-principal ID, and the key's ID and name, not the credential. An event for a
-request made with a
+example, service API key issuance and revocation record the caller, the
+principal ID, and the key's ID and name, not the credential. An API route's
+event for a request made with a
 [service API key](../../reference/authentication/service-api-keys.md#revocation-and-audit)
 records that key's ID in `actorServiceKeyId`. The audit event contract does not
 represent a general log of all successful reads, Agent prompts, or model
