@@ -2740,12 +2740,16 @@ test("gateway runtime status maps native Slack channel status without provider d
       if (specifier === "openclaw/plugin-sdk/gateway-runtime") {
         return {
           isGatewayTransportError: (error) => error === transportError,
-          // OpenClaw's predicate for a request refusal the Gateway answered.
+          // OpenClaw's predicate for a request refusal the Gateway answered (call.ts).
           isGatewayClientRequestError: (error) =>
             error instanceof Error &&
             error.name === "GatewayClientRequestError" &&
             typeof error.gatewayCode === "string" &&
-            typeof error.retryable === "boolean",
+            error.gatewayCode.length > 0 &&
+            error.message.length > 0 &&
+            typeof error.retryable === "boolean" &&
+            (error.retryAfterMs === undefined ||
+              (Number.isInteger(error.retryAfterMs) && error.retryAfterMs >= 0)),
           async callGatewayFromCli(method, options, params, { signal }) {
             assert.equal(method, "channels.status");
             assert.deepEqual(plain(params), { channel: "slack", probe: true, timeoutMs: 5000 });
@@ -2904,6 +2908,7 @@ test("gateway runtime status maps native Slack channel status without provider d
     // Only the unknown-channel refusal for Slack itself means "no Slack channel".
     [gatewayRefusal("INVALID_REQUEST", "unknown channel: teams"), "PROBE_FAILED"],
     [gatewayRefusal("UNAVAILABLE", "unknown channel: slack"), "PROBE_FAILED"],
+    [new Error("unknown channel: slack"), "PROBE_FAILED"],
   ]) {
     channelError = error;
     const diagnostics = await readRuntimeChannelChecksFromHandler(statusHandler);
@@ -2974,7 +2979,7 @@ test("gateway runtime status maps native Slack channel status without provider d
   assert.equal(pendingChannelSignal.aborted, true);
   await abortedRequest;
   responseListeners.close?.();
-  assert.equal(channelStatusCalls, 14);
+  assert.equal(channelStatusCalls, 15);
 });
 
 test("Codex runtime gates startup and readiness on a successful native authentication turn", async (t) => {

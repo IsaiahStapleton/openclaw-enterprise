@@ -375,10 +375,11 @@ function gatewayRefusedAuthentication(gatewayRuntime, error) {
   );
 }
 
-// The Gateway knows only the channel plugins it loaded, and OpenClaw loads a channel's plugin
-// only when the Configuration sets that channel up. So channels.status for a channel the
-// Agent does not use is refused as INVALID_REQUEST "unknown channel: <id>"
-// (src/gateway/server-methods/channels.ts in the pinned OpenClaw).
+// The Gateway resolves its loaded channel plugins plus manifest plugins for the channels the
+// Configuration sets up, so channels.status for a channel the Agent does not use is refused
+// as INVALID_REQUEST "unknown channel: <id>" (src/gateway/server-methods/channels.ts in the
+// pinned OpenClaw). A configured channel whose plugin failed to load still resolves and takes
+// the status path.
 function gatewayRefusedUnknownChannel(gatewayRuntime, error, channel) {
   return (
     typeof channel === "string" &&
