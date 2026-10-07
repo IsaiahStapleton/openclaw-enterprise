@@ -188,10 +188,10 @@ Compose service with Docker-compatible engine access.
 `internal/occdev/repository_k3d.go:enableDevelopmentRepository`.
 
 Before tool discovery or state creation, `upK3d` requires the control-plane Kubernetes
-namespace name to match a DNS label of at most 63 characters. Cleanup accepts the historical
-Namespace syntax in recorded state, including longer names, and deletes only the
-validated recorded cluster through its recorded engine endpoint. All other state
-validation and ownership checks still apply.
+namespace name to match a DNS label of at most 63 characters. Cleanup accepts historical,
+longer Namespace names in recorded state and deletes only the validated recorded
+cluster through its recorded engine endpoint; other state and ownership checks
+still apply.
 
 Both k3d profiles use legacy iptables and honor an explicit IPv4 node resolver
 without changing host DNS.
@@ -210,7 +210,7 @@ timeout. Before configuring gateway proxy trust,
 `internal/occdev/network_k3d.go:verifyDevelopmentNetworkPolicy`
 checks allowed and denied Pod traffic with credential-free Pods and a temporary
 policy, then rechecks the Driver's policies once bootstrap creates the initial
-gateway Namespace. Probe Pods use short graceful shutdowns and
+gateway Namespace. Probe Pods use short grace periods and
 UID-preconditioned deletes. Cleanup waits for the selector-matching Pods before
 removing their egress policy; any probe or cleanup failure fails startup. The
 checks are point-in-time and single-node.
@@ -227,8 +227,8 @@ Startup waits for the Gateway, certificate, and proxy Pods before reporting
 success. Envoy source addresses must fall inside the selected node's Pod CIDR;
 the tenant ingress policy must still admit only the Gateway's exact proxy peer.
 
-The loopback development proxy also terminates browser HTTPS using a private
-per-installation CA and a leaf limited to that installation's console and Agent
+The loopback development proxy also terminates browser HTTPS with a private
+per-installation CA whose leaf covers only that installation's console and Agent
 hosts. The API and browser NodePorts publish only to host loopback. The CA private
 key stays in the private state directory; browser CA trust is an explicit
 operator action.
@@ -288,8 +288,8 @@ owns both OpenShell control-plane sequences.
 `internal/occdev/kubernetes.go:writeInstallation`,
 `internal/occdev/openshell.go:prepareOpenShell`.
 
-Compose starts PostgreSQL, migration, and bootstrap. After both one-shot
-services exit successfully, startup creates the dedicated k3d cluster on the
+Compose starts PostgreSQL, migration, and bootstrap. Once both one-shot
+services succeed, startup creates the dedicated k3d cluster on the
 Compose network.
 With the default Sandbox profile, `OCC_DEVELOPMENT_K3S_IMAGE` selects the node
 image; its default `+v1.35` resolves the latest K3s 1.35 patch. An explicit
@@ -299,9 +299,8 @@ current context unchanged.
 
 The host kubeconfig remains owner-readable. The container kubeconfig uses the
 cluster's internal load-balancer hostname with TLS verification. It and the
-container configuration are individually readable by non-root containers,
-behind the private host directory, and mounted read-only into the API and
-Kubernetes worker. Neither service receives the engine socket.
+container configuration are readable by non-root containers behind the private
+host directory and mounted read-only into the API and Kubernetes worker. Neither service receives the engine socket.
 
 The lifecycle imports the runtime and OpenShell images under engine-recorded
 names, including Podman's `localhost/` tags and Docker Hub's familiar names. For
@@ -309,13 +308,13 @@ an omitted tag, `internal/occdev/kubernetes.go:engineImageReference` matches
 `:latest` and rejects missing or ambiguous matches. It then resolves the
 in-cluster digest. Before `writeInstallation`, `internal/occdev/up.go:Up` and
 `internal/occdev/openshell_k3d.go:upK3d` call
-`internal/occdev/status_proxy_k3d.go:developmentStatusProxySource`. Node inventory retains caller context outside polling.
+`internal/occdev/status_proxy_k3d.go:developmentStatusProxySource`. Node inventory keeps caller context outside polling.
 
-`internal/occdev/up.go:poll` bounds route queries to two minutes through `internal/occdev/command.go:command`
-(`exec.CommandContext`): deadline or caller cancellation stops blocked
-queries. Default routes keep polling. `developmentStatusProxyCidr` requires one IPv4 `cni0` source inside the canonical node Pod CIDR, excluding
-its network address; it returns `/32`. Errors return no source; both callers stop before Installation writing and
-follow existing cleanup.
+`internal/occdev/up.go:poll` bounds route queries to two minutes via `internal/occdev/command.go:command`
+(`exec.CommandContext`), so deadline or cancellation stops blocked queries; default
+routes keep polling. `developmentStatusProxyCidr` requires one IPv4 `cni0` source
+in the node Pod CIDR, not its network address, and returns `/32`. On error, both
+callers stop before Installation writing and follow existing cleanup.
 
 `internal/occdev/kubernetes.go:writeInstallation` then selects Kubernetes Compute,
 Configuration, and Secret Drivers with native IAM; without OpenShell,
