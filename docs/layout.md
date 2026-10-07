@@ -21,6 +21,10 @@ keep its dependency installation separate from the root workspace.
 The console Storybook in `scripts/console-storybook/` is also an isolated tool
 with its own manifest and lockfile. See [Console Storybook](contributing/console-storybook.md).
 
+Within `internal/occcli/`, `cli.go` assembles the command tree and resource
+commands. `agent_runtime.go` owns runtime inspection, revision selection for
+runtime reads, and log polling; `output.go` owns terminal presentation.
+
 ## Source ownership
 
 | Path                                                      | Responsibility                                                                                               |
