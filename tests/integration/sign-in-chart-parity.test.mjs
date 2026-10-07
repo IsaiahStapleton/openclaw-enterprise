@@ -1172,6 +1172,8 @@ test(
     };
     const notOrigin = /auth\.baseUrl must be an absolute HTTP\(S\) origin/;
     const plainHttp = /auth\.baseUrl must use HTTPS unless its host is 127\.0\.0\.1 or localhost/;
+    const unicodeEdge =
+      /auth\.baseUrl must not begin or end with Unicode spaces or invisible characters/;
     const cases = [
       ...[
         "https://console.oce.example.internal/occ",
@@ -1208,7 +1210,38 @@ test(
         "http://localhost:8080",
         "HTTP://LocalHost:8080",
         " http://localhost ",
+        "https://bücher.oce.example.internal",
+        "https://console.例え.テスト",
       ].map((baseUrl) => ({ baseUrl, chart: undefined, api: true, job: true })),
+      // URL parsing strips only C0 controls and spaces from the ends, so other Unicode spaces
+      // and invisible characters there reach the parser, which refuses them in the scheme or a
+      // host. The chart refuses them all; it is deliberately stricter for U+FEFF and U+200B at
+      // the end, which the host parser drops. A trailing unassigned code point (U+0378), which
+      // RE2's \p{C} does not cover, is refused too.
+      {
+        baseUrl: "https://console.oce.example.internal\u0378",
+        chart: unicodeEdge,
+        api: false,
+        job: false,
+      },
+      ...[
+        ["\u00a0", false],
+        ["\u2003", false],
+        ["\u3000", false],
+        ["\ufeff", true],
+        ["\u200b", true],
+      ].flatMap(([space, trailingAccepted]) =>
+        [
+          [`${space}https://console.oce.example.internal`, false],
+          [`https://console.oce.example.internal${space}`, trailingAccepted],
+          [` ${space}https://console.oce.example.internal${space} `, false],
+        ].map(([baseUrl, accepted]) => ({
+          baseUrl,
+          chart: unicodeEdge,
+          api: accepted,
+          job: accepted,
+        })),
+      ),
       // The API serves plain HTTP anywhere, but the bootstrap Job refuses it off loopback.
       ...[
         "http://console.oce.example.internal",
