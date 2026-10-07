@@ -840,18 +840,6 @@ const invalid = [
       OCC_AUTH_COOKIE_DOMAIN: "oce.example.internal",
     },
   },
-  // A loopback HTTP origin passes the bootstrap Job, but production external sign-in needs HTTPS.
-  ...[
-    ["GitHub", "github", githubUpgradeValues(recoveryUserId)],
-    ["Google", "google", googleUpgradeValues(recoveryUserId)],
-    ["OIDC", "oidc", oidcUpgradeValues(recoveryUserId)],
-  ].map(([label, provider, values]) => ({
-    name: `${label} sign-in over loopback HTTP`,
-    values: { ...values, "auth.baseUrl": "http://localhost:8080" },
-    chart: new RegExp(`auth\\.${provider} requires an HTTPS auth\\.baseUrl`),
-    [provider]: true,
-    env: { OCC_AUTH_BASE_URL: "http://localhost:8080" },
-  })),
 ];
 
 test("values the chart refuses are settings the API also refuses", tooling, async (t) => {
@@ -1285,7 +1273,9 @@ test(
 );
 
 // The chart's sign-in checks read the scheme as URL parsing does, like the API: an uppercase
-// HTTPS origin, or one with surrounding spaces, passes for GitHub, Google and OIDC.
+// HTTPS origin, or one with surrounding spaces, passes for GitHub, Google and OIDC. Plain HTTP
+// stays refused even on loopback, where the bootstrap Job would accept it: production external
+// sign-in requires HTTPS (createControllerAuth, after the database opens).
 test("external sign-in accepts the HTTPS spellings the API accepts", tooling, async (t) => {
   const directory = await startupDirectory(t);
   const cases = [];
@@ -1294,6 +1284,11 @@ test("external sign-in accepts the HTTPS spellings the API accepts", tooling, as
     ["Google", googleUpgradeValues(recoveryUserId), googleUpgradeSettings(recoveryUserId)],
     ["OIDC", oidcUpgradeValues(recoveryUserId), oidcUpgradeSettings(recoveryUserId)],
   ]) {
+    assert.match(
+      await chartRefusal({ ...values, "auth.baseUrl": "http://localhost:8080" }),
+      new RegExp(`auth\\.${provider.toLowerCase()} requires an HTTPS auth\\.baseUrl`),
+      provider,
+    );
     for (const baseUrl of [
       "HTTPS://Console.OCE.example.internal",
       " https://console.oce.example.internal ",
