@@ -358,13 +358,20 @@ func TestAgentLogsRejectsInvalidFlagsBeforeAnyRequest(t *testing.T) {
 			t.Errorf("%v: sent requests %v", args, stub.paths)
 		}
 	}
-	stub := &runtimeLogStub{t: t}
-	_, _, err := runLogsCommand(t, context.Background(), stub, "agent", "logs", "agt_1", "--source", "gateway")
-	if err == nil || !strings.Contains(err.Error(), "has no readable revisions") {
-		t.Fatalf("expected a missing revision error, got %v", err)
-	}
-	if len(stub.queries) != 0 {
-		t.Fatalf("sent %d log requests for an Agent without revisions", len(stub.queries))
+	// --follow exits cleanly only when the lookup failed because of cancellation.
+	for _, follow := range []bool{false, true} {
+		args := []string{"agent", "logs", "agt_1", "--source", "gateway"}
+		if follow {
+			args = append(args, "--follow")
+		}
+		stub := &runtimeLogStub{t: t}
+		_, _, err := runLogsCommand(t, context.Background(), stub, args...)
+		if err == nil || !strings.Contains(err.Error(), "has no readable revisions") {
+			t.Fatalf("follow=%v: expected a missing revision error, got %v", follow, err)
+		}
+		if len(stub.queries) != 0 {
+			t.Fatalf("follow=%v: sent %d log requests for an Agent without revisions", follow, len(stub.queries))
+		}
 	}
 }
 
