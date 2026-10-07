@@ -198,9 +198,9 @@ before running the checks:
   password claim. Keep native admin enabled for the password profile, and gateway
   routing enabled with the reviewed GatewayClass and Secret names. Helm refuses an
   `auth.baseUrl` that is not an `https` origin (`http` only for `localhost` or
-  `127.0.0.1`), has a path, query, fragment or user info, or starts or ends with
-  Unicode spaces or invisible characters. With native admin, its host must be
-  inside `agentNativeAdmin.sharedCookieDomain`.
+  `127.0.0.1`), has a path other than `/`, a query, fragment or user info, or
+  starts or ends with Unicode spaces or invisible characters. With native admin,
+  it must be `https` and its host inside `agentNativeAdmin.sharedCookieDomain`.
 - `installation.yaml`: set cluster name, log level, DNS selectors,
   service-principal token settings, Secret prefixes, runtime storage class,
   immutable runtime image digests, and PluginDriver catalog. Set

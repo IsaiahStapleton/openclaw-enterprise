@@ -235,7 +235,7 @@ before another attempt.
 | Variable                          | Required value or format                                                                                |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `OCC_AUTH_SECRET`                 | Same mounted Better Auth secret used by the API.                                                        |
-| `OCC_AUTH_BASE_URL`               | Same absolute Better Auth base URL used by the API.                                                     |
+| `OCC_AUTH_BASE_URL`               | Same as the API; HTTPS unless the host is `localhost` or `127.0.0.1`.                                   |
 | `OCC_BOOTSTRAP_ADMIN_EMAIL`       | Email address for the first administrator account.                                                      |
 | `OCC_BOOTSTRAP_PASSWORD_FILE`     | New file path on protected operator-owned storage for the generated password.                           |
 | `OCC_BOOTSTRAP_INSTALLATION_NAME` | Installation display name; it must follow the API Name rule (`INSTALLATION_NAME_INVALID`).              |
