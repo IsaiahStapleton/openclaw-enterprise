@@ -1,7 +1,10 @@
 // Runtime image startup smoke tests split from runtime-image-startup.test.mjs so
 // CI can run the files in parallel lanes: startup model probes, SIGTERM during
-// startup, and the inactive Slack approver startup check. Native worker
-// enrollment and reconnect are in runtime-image-native-worker.test.mjs.
+// startup, and the dedicated Gateway's exit when OpenClaw crashes during a peer
+// status outage or a replacement peer changes. Native worker enrollment and
+// reconnect, and the inactive Slack approver startup check, are in
+// runtime-image-native-worker.test.mjs; the in-place peer respawn is in
+// runtime-image-gateway-peer.test.mjs.
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -9,12 +12,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { imageSmokeTimeoutMultiplier } from "../helpers/image-smoke-timeout.mjs";
-import { GATEWAY_RUNTIME_ENTRYPOINT as DOCKER_GATEWAY_RUNTIME_ENTRYPOINT } from "../../apps/controller/src/drivers/compute/docker/index.ts";
 import {
   AGENT_READINESS_ENTRYPOINT,
   AGENT_RUNTIME_ENTRYPOINT,
   GATEWAY_READINESS_ENTRYPOINT,
   GATEWAY_RUNTIME_ENTRYPOINT as KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+  PLUGIN_APP_SERVER_TOKEN_HMAC_DOMAIN,
   RUNTIME_WRAPPER_COMMAND,
 } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
 import { nodeProgramArguments } from "../../apps/controller/src/drivers/compute/node-program.ts";
@@ -28,6 +31,8 @@ import {
   waitForDockerLog,
   createAdmittedRuntimeImageConfiguration,
   jsonLogEntries,
+  commandOutput,
+  runGatewaySmoke,
 } from "../helpers/runtime-image-startup.mjs";
 
 // Startup model probes on Kubernetes. These tests run the real Codex Harness
@@ -665,113 +670,121 @@ test(
   },
 );
 
-test(
-  "runtime image omits inactive Slack approvers and checks native compatibility before gateway launch",
-  imageTestOptions,
-  async (t) => {
-    const containerName = `oce-runtime-image-approvers-${randomBytes(6).toString("hex")}`;
-    t.after(() => runDocker(["rm", "-f", containerName]).catch(() => {}));
-    // Exercise both production launchers against the selected native image. No
-    // model or Slack credentials are provided, and the container has no network.
-    const launch = String.raw`
-const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const cp = require("node:child_process");
-const entrypoints = JSON.parse(fs.readFileSync(0, "utf8"));
-const manifest = { kind: "openclaw", selections: {}, pluginApprovers: [] };
-const base = {
-  gateway: { mode: "local", bind: "loopback", controlUi: { enabled: false },
-    auth: { mode: "token", token: "synthetic-approver-startup-token" } },
-  logging: { consoleLevel: "error" },
-};
-const schemaResult = cp.spawnSync("node", ["/app/openclaw.mjs", "config", "schema", "--json"], { encoding: "utf8", timeout: 30000, maxBuffer: 8 * 1024 * 1024 });
-assert.equal(schemaResult.status, 0, schemaResult.stderr);
-const supportsSlackApprovers = JSON.parse(schemaResult.stdout).properties?.approvals?.properties?.plugin?.properties?.slack !== undefined;
-async function scenario(entrypoint, channel, label) {
-  const directory = fs.mkdtempSync("/tmp/oce-approver-startup-");
-  const config = { ...base, ...(channel === undefined ? {} : { channels: { slack: channel } }) };
-  const configPath = directory + "/base.json";
-  fs.writeFileSync(configPath, JSON.stringify(config));
-  const environment = { ...process.env, HOME: "/home/node", OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_STATE_DIR: directory, OPENCLAW_CONFIG_JSON: JSON.stringify(config),
-    OPENCLAW_PLUGIN_RUNTIME_JSON: JSON.stringify({ manifest }), OPENCLAW_GATEWAY_PORT: "18789",
-    OPENCLAW_RUNTIME_STATUS_PORT: "18888", OPENCLAW_RUNTIME_STATUS_CONTAINER: "gateway",
-    OPENCLAW_AGENT_REVISION_ID: "rev_approver-startup", OPENCLAW_POD_UID: "pod_approver-startup" };
-  const child = cp.spawn("node", ["-e", ...entrypoint], { env: environment, stdio: ["ignore", "pipe", "pipe"] });
-  let output = "";
-  child.stdout.on("data", value => { output += value; });
-  child.stderr.on("data", value => { output += value; });
-  const exited = new Promise(resolve => child.once("exit", resolve));
-  const deadline = Date.now() + 45000;
-  const incompatible = channel?.enabled !== false && channel !== undefined && !supportsSlackApprovers;
+async function assertGatewayExitsDuringPeerScenario(t, scenario, expectedPhase) {
+  const directory = await mkdtemp(join(tmpdir(), "oce-runtime-image-config-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const configurationPath = join(directory, "openclaw.json");
+  await writeFile(
+    configurationPath,
+    JSON.stringify(createAdmittedRuntimeImageConfiguration("codex")),
+  );
+  const manifest = {
+    kind: "codex",
+    selections: {
+      "codex-plugin:linear@openai-curated-remote": {
+        enabled: true,
+        toolDefaults: { approval: "provider_default" },
+      },
+    },
+  };
+  const { containerName } = await runGatewaySmoke(t, "codex", {
+    configurationPath: "/etc/openclaw/openclaw.json",
+    entrypoint: KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT,
+    volumes: [`${configurationPath}:/etc/openclaw/openclaw.json:ro`],
+    extraEnvironment: [
+      "APP_SERVER_URL=ws://[::1]:4500",
+      `OPENCLAW_PLUGIN_RUNTIME_JSON=${JSON.stringify({ manifest })}`,
+      "OPENCLAW_PLUGIN_STATUS_CONTAINER=gateway",
+      "OPENCLAW_PLUGIN_STATUS_PORT=18791",
+      "OPENCLAW_AGENT_REVISION_ID=revision-peer-respawn",
+      "OPENCLAW_POD_UID=pod-peer-respawn",
+      "OPENCLAW_WORKSPACE_DIR=/home/node/workspace",
+      // The stale-replacement fixture answers its verification read only after
+      // checking the replacement (a readiness command and two local reads), so
+      // the wrapper's peer read must outlast that work on a slow runner.
+      `OPENCLAW_PLUGIN_RUNTIME_REQUEST_TIMEOUT_MS=${30_000 * imageSmokeTimeoutMultiplier}`,
+    ],
+    waitUntilReady: false,
+  });
+  const fixture = await readFile(
+    new URL("../fixtures/runtime-gateway-peer-respawn.mjs", import.meta.url),
+    "utf8",
+  );
+  let failure;
   try {
-    let observed = false;
-    while (Date.now() < deadline) {
-      if (child.exitCode !== null) throw new Error(label + " exited before readiness: " + output);
-      if (incompatible) {
-        observed = output.includes("cannot validate approvals.plugin.slack");
-      } else {
-        try { observed = (await fetch("http://127.0.0.1:18789/healthz", { signal: AbortSignal.timeout(1000) })).ok; } catch {}
-      }
-      if (observed) break;
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    assert.ok(observed, label + " did not report its expected startup outcome: " + output);
-    if (incompatible) {
-      assert.equal(fs.existsSync(directory + "/openclaw.json"), false, "Rejected policy must not replace the native config");
-      assert.deepEqual(JSON.parse(fs.readFileSync(configPath, "utf8")), config);
-      await assert.rejects(fetch("http://127.0.0.1:18789/healthz", { signal: AbortSignal.timeout(1000) }));
-      if (label.startsWith("kubernetes")) {
-        const status = await (await fetch("http://127.0.0.1:18888/openclaw/runtime/status")).json();
-        assert.equal(status.runtimeFailure.check, "plugin-approvers");
-        assert.equal(status.runtimeFailure.code, "INCOMPATIBLE_RESPONSE");
-      }
-    } else {
-      const effective = JSON.parse(fs.readFileSync(directory + "/openclaw.json", "utf8"));
-      assert.deepEqual(effective.approvals?.plugin?.slack, channel === undefined || channel.enabled === false ? undefined : { approvers: [] });
-    }
-    assert.deepEqual(manifest.pluginApprovers, []);
-    assert.equal(fs.readdirSync("/tmp").some(name => name.startsWith("oce-plugin-approvers-")), false, "Capability probe must clean up its private config");
-  } finally {
-    child.kill("SIGTERM");
-    await exited;
-    fs.rmSync(directory, { recursive: true, force: true });
+    await runDocker(
+      [
+        "exec",
+        "-e",
+        `OCC_TEST_GATEWAY_SCENARIO=${scenario}`,
+        "-e",
+        `OCC_TEST_GATEWAY_READINESS=${GATEWAY_READINESS_ENTRYPOINT}`,
+        "-e",
+        `OCC_TEST_TOKEN_DOMAIN=${PLUGIN_APP_SERVER_TOKEN_HMAC_DOMAIN}`,
+        containerName,
+        "node",
+        "--input-type=module",
+        "-e",
+        fixture,
+      ],
+      { timeout: 300_000 * imageSmokeTimeoutMultiplier },
+    );
+  } catch (error) {
+    failure = error;
+  }
+  assert.ok(failure, `the container should exit for ${scenario}`);
+  if (!(failure.stdout ?? "").includes(`"phase":"${expectedPhase}"`)) {
+    const logs = await runDocker(["logs", containerName]).catch((error) => error);
+    assert.fail(
+      `Expected ${expectedPhase} was not observed.\n${commandOutput(failure)}\n${commandOutput(logs)}`,
+    );
+  }
+  // The fixture fails on its own only when the wrapper outlives its deadline;
+  // otherwise it dies with the container.
+  assert.doesNotMatch(
+    commandOutput(failure),
+    /remained running after its child exited|did not reject the stale replacement peer/,
+  );
+  // Its `docker exec` can return before Docker has recorded the container's own
+  // exit, so wait for that record (bounded) before inspecting the state.
+  const exited = await runDocker(["wait", containerName], {
+    timeout: 30_000 * imageSmokeTimeoutMultiplier,
+  }).catch(async (error) => {
+    const logs = await runDocker(["logs", containerName]).catch((logsError) => logsError);
+    assert.fail(`The Gateway container did not exit.\n${error.message}\n${commandOutput(logs)}`);
+  });
+  assert.equal(exited.stdout.trim(), "1");
+  const inspect = await runDocker(["inspect", containerName, "--format", "{{json .State}}"]);
+  const state = JSON.parse(inspect.stdout);
+  assert.equal(state.Status, "exited");
+  assert.equal(state.ExitCode, 1);
+  if (scenario === "stale-replacement") {
+    const logs = await runDocker(["logs", containerName]);
+    const entries = jsonLogEntries(`${logs.stdout}\n${logs.stderr}`);
+    assert.ok(
+      entries.some(
+        (entry) =>
+          entry.event === "runtime.startup_phase" &&
+          entry.phase === "peer-verification-changed" &&
+          entry.outcome === "failed",
+      ),
+      "the Gateway must reject the changed peer, not merely fail its status request",
+    );
   }
 }
-(async () => {
-  for (const [label, entrypoint] of Object.entries(entrypoints)) {
-    await scenario(entrypoint, undefined, label + " absent");
-    await scenario(entrypoint, { enabled: false }, label + " disabled");
-    await scenario(entrypoint, { enabled: true }, label + " configured");
-  }
-  console.log("PLUGIN_APPROVER_STARTUP_PASSED");
-})().catch(error => { console.error(error); process.exitCode = 1; });
-`;
-    const { stdout } = await runDocker(
-      [
-        "run",
-        "-i",
-        "--rm",
-        "--name",
-        containerName,
-        "--network",
-        "none",
-        "--cap-drop",
-        "ALL",
-        "--security-opt",
-        "no-new-privileges",
-        "--entrypoint",
-        "node",
-        image,
-        "-e",
-        launch,
-      ],
-      { timeout: 180_000 * imageSmokeTimeoutMultiplier },
-      JSON.stringify({
-        docker: nodeProgramArguments(DOCKER_GATEWAY_RUNTIME_ENTRYPOINT),
-        kubernetes: nodeProgramArguments(KUBERNETES_GATEWAY_RUNTIME_ENTRYPOINT),
-      }),
-    );
-    assert.match(stdout, /PLUGIN_APPROVER_STARTUP_PASSED/);
+
+test(
+  "runtime image Gateway exits if OpenClaw crashes during a peer status outage",
+  imageTestOptions,
+  async (t) => {
+    await assertGatewayExitsDuringPeerScenario(t, "peer-outage-exit", "peer-unready");
+  },
+);
+
+test(
+  "runtime image Gateway rejects a peer changed during replacement startup",
+  imageTestOptions,
+  async (t) => {
+    await assertGatewayExitsDuringPeerScenario(t, "stale-replacement", "stale-peer-verified");
   },
 );
