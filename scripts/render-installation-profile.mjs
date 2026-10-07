@@ -340,7 +340,9 @@ function validateNativeAdminDomains(domain, sharedCookieDomain, authBaseUrl, dia
   } catch {
     baseUrl = undefined;
   }
-  if (baseUrl?.protocol !== "https:") {
+  if (baseUrl === undefined) {
+    diagnostics.errors.push("controlPlane.authBaseUrl must be an absolute URL.");
+  } else if (baseUrl.protocol !== "https:") {
     diagnostics.errors.push("controlPlane.authBaseUrl must use HTTPS with native admin.");
   } else if (dnsHostname.test(lowerSharedCookieDomain)) {
     const host = baseUrl.hostname.replace(/\.$/, "");

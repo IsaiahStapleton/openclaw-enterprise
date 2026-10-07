@@ -150,7 +150,7 @@ an allowlist without its provider is refused: the API treats it as a startup err
 {{- $sharedCookieDomain := lower .Values.agentNativeAdmin.sharedCookieDomain -}}
 {{- if not (or (eq $agentNativeAdminDomain $sharedCookieDomain) (hasSuffix (printf ".%s" $sharedCookieDomain) $agentNativeAdminDomain)) -}}{{- fail "agentNativeAdmin.domain must be inside agentNativeAdmin.sharedCookieDomain" -}}{{- end -}}
 {{- /* The API's startup checks, mirrored: shared session cookies are secure-only, and the console host must be inside their parent. */ -}}
-{{- $authBaseUrl := urlParse (toString .Values.auth.baseUrl) -}}
+{{- $authBaseUrl := urlParse (trim (toString .Values.auth.baseUrl)) -}}
 {{- if ne $authBaseUrl.scheme "https" -}}{{- fail "agentNativeAdmin.enabled requires an HTTPS auth.baseUrl; shared session cookies are secure-only" -}}{{- end -}}
 {{- $authBaseHost := trimSuffix "." (lower $authBaseUrl.hostname) -}}
 {{- if not (or (eq $authBaseHost $sharedCookieDomain) (hasSuffix (printf ".%s" $sharedCookieDomain) $authBaseHost)) -}}{{- fail "agentNativeAdmin.sharedCookieDomain must contain the auth.baseUrl host" -}}{{- end -}}

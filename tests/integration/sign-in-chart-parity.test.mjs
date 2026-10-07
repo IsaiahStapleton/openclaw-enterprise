@@ -1089,6 +1089,7 @@ test("the chart refuses native admin base URLs the API refuses at startup", tool
     "https://Console.OCE.example.com",
     "https://console.oce.example.com.",
     "https://console.oce.example.com:8443",
+    " https://console.oce.example.com ",
   ]) {
     // The API's cookie checks pass; it stops later, at the Installation it was not given.
     assert.throws(apiRefusal(baseUrl), /Better Auth issuer requires an Installation/, baseUrl);
