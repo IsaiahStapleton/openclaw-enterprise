@@ -195,10 +195,29 @@ function asString(source, path, diagnostics, { pattern, validate, description } 
   return value;
 }
 
+// URL parsing strips only C0 controls and spaces (U+0000 to U+0020) from the ends.
+function stripUrlEdges(value) {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) <= 0x20) {
+    start += 1;
+  }
+  while (end > start && value.charCodeAt(end - 1) <= 0x20) {
+    end -= 1;
+  }
+  return value.slice(start, end);
+}
+
 // The API and the bootstrap Job accept only an absolute HTTP(S) origin (validHttpBaseURL).
-// Like the chart, this also refuses spellings URL parsing repairs: https:host, /. and /%2e.
+// Like the chart, this also refuses spellings URL parsing repairs: https:host, /. and /%2e,
+// and other Unicode spaces or invisible characters at either end (NBSP, U+3000, U+FEFF,
+// U+200B), which the API's parser keeps and mostly refuses.
 function httpOrigin(value) {
-  if (!/^https?:\/\/[^/?#]*\/?(?:[?#].*)?$/i.test(value.trim())) {
+  const stripped = stripUrlEdges(value);
+  if (
+    /^[\p{Z}\p{C}]|[\p{Z}\p{C}]$/u.test(stripped) ||
+    !/^https?:\/\/[^/?#]*\/?(?:[?#].*)?$/i.test(stripped)
+  ) {
     return false;
   }
   let url;
