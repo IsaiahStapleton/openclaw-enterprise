@@ -2528,13 +2528,17 @@ function repositories(
         servicePrincipal.namespaceId !== namespace.id ||
         servicePrincipal.agentId !== undefined
       ) {
-        throw new ScopeViolationError("The ServicePrincipal must belong to an available Namespace.");
+        throw new ScopeViolationError(
+          "The ServicePrincipal must belong to an available Namespace.",
+        );
       }
       if (
         snapshot.servicePrincipals.has(servicePrincipal.id) ||
         iamSubjects.identities.some((identity) => identity.id === servicePrincipal.id)
       ) {
-        throw new ResourceConflictError("The server generated an existing ServicePrincipal identity.");
+        throw new ResourceConflictError(
+          "The server generated an existing ServicePrincipal identity.",
+        );
       }
       const saved = Object.freeze({
         kind: "service_principal" as const,

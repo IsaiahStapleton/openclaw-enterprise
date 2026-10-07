@@ -1119,9 +1119,7 @@ export interface IAMPolicyRepository extends IAMPolicyReadRepository {
   deleteRole(namespaceId: string, roleId: string): Promise<boolean>;
   createAccessBinding(binding: AccessBinding): Promise<Readonly<AccessBinding>>;
   deleteAccessBinding(namespaceId: string, bindingId: string): Promise<boolean>;
-  createServicePrincipal(
-    servicePrincipal: ServicePrincipal,
-  ): Promise<Readonly<ServicePrincipal>>;
+  createServicePrincipal(servicePrincipal: ServicePrincipal): Promise<Readonly<ServicePrincipal>>;
 }
 
 export interface IAMPolicyReadContext {

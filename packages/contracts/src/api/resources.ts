@@ -1422,9 +1422,7 @@ export type IAMRoleListResponse = Type.Static<typeof IAMRoleListResponse>;
 export type IAMAccessBindingResponse = Type.Static<typeof IAMAccessBindingResponse>;
 export type IAMAccessBindingListResponse = Type.Static<typeof IAMAccessBindingListResponse>;
 export type IAMServicePrincipalResponse = Type.Static<typeof IAMServicePrincipalResponse>;
-export type IAMServicePrincipalListResponse = Type.Static<
-  typeof IAMServicePrincipalListResponse
->;
+export type IAMServicePrincipalListResponse = Type.Static<typeof IAMServicePrincipalListResponse>;
 export type AgentListResponse = Type.Static<typeof AgentListResponse>;
 export type BackendListResponse = Type.Static<typeof BackendListResponse>;
 export type AgentProvisioningResponse = Type.Static<typeof AgentProvisioningResponse>;

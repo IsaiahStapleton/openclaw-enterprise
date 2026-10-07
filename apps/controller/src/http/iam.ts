@@ -155,9 +155,19 @@ export const iamHandlers = {
   },
   async listIAMServicePrincipals({ controller, context, request, reply, namespaceId }) {
     const principals = await controller.listIAMServicePrincipals(context.actorId, namespaceId);
-    reply.send({ data: principals.map(clientIAMServicePrincipal), meta: { requestId: request.id } });
+    reply.send({
+      data: principals.map(clientIAMServicePrincipal),
+      meta: { requestId: request.id },
+    });
   },
-  async createIAMServicePrincipal({ controller, context, request, reply, namespaceId, mutationEvent }) {
+  async createIAMServicePrincipal({
+    controller,
+    context,
+    request,
+    reply,
+    namespaceId,
+    mutationEvent,
+  }) {
     const created = await controller.transact(async (unit) => {
       const servicePrincipal = await controller.createIAMServicePrincipal(
         context.actorId,
@@ -179,6 +189,9 @@ export const iamHandlers = {
       namespaceId,
       params.servicePrincipalId as string,
     );
-    reply.send({ data: clientIAMServicePrincipal(servicePrincipal), meta: { requestId: request.id } });
+    reply.send({
+      data: clientIAMServicePrincipal(servicePrincipal),
+      meta: { requestId: request.id },
+    });
   },
 } satisfies ResourceHandlers;
