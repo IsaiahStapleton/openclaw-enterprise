@@ -6,8 +6,8 @@
   },
   "fileConcurrency": 2,
   "parallelFiles": [
-    "tests/integration/runtime-image-startup.test.mjs",
-    "tests/integration/runtime-image-native-worker.test.mjs"
+    "tests/integration/runtime-image-native-worker.test.mjs",
+    "tests/integration/runtime-image-startup.test.mjs"
   ],
   "files": [
     {
