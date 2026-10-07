@@ -53,6 +53,9 @@ owning Driver or Backend and wire it through composition. See
 [platform architecture](design.md) for component interactions, implementation
 status, and remaining design requirements.
 
+Within controller composition, `installation-presets.ts` owns Preset file loading
+and bundled-version assembly; `installation-config.ts` owns Driver composition.
+
 HTTP error details live in `apps/controller/src/http/error-details.ts`.
 It translates schema failures into detail paths and expected values. `http/errors.ts`
 owns platform-error mapping, response formatting, and removal of request values
