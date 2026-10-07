@@ -4000,9 +4000,33 @@ test("session inspection stays optional and never exposes session or credential 
   const authenticated = await injectedRequest(fixture.app, "GET", "/api/auth/session");
   assert.equal(authenticated.status, 200);
   assert.notEqual(authenticated.data, null);
+  // Match secret-bearing field names at every depth, not serialized values: the
+  // generated user ID and random sessionKey can spell "token" by chance (finding 725).
+  const fieldNames = [];
+  const collectFieldNames = (value) => {
+    if (value === null || typeof value !== "object") {
+      return;
+    }
+    for (const [key, child] of Object.entries(value)) {
+      fieldNames.push(key);
+      collectFieldNames(child);
+    }
+  };
+  collectFieldNames(authenticated.data);
+  assert.deepEqual(
+    fieldNames.filter((name) => /token|password|credential/i.test(name)),
+    [],
+  );
+  // Known secret values must not appear anywhere, under any field name.
   const exposed = JSON.stringify(authenticated.data);
-  assert.doesNotMatch(exposed, /token|password|credential/i);
   assert.equal(exposed.includes(fixture.app.defaultSession.cookie), false);
+  for (const pair of fixture.app.defaultSession.cookie.split(";")) {
+    const value = pair.slice(pair.indexOf("=") + 1).trim();
+    assert.ok(value.length > 0);
+    assert.equal(exposed.includes(value), false);
+    assert.equal(exposed.includes(decodeURIComponent(value)), false);
+  }
+  assert.equal(exposed.includes(fixture.authFixture.password), false);
   assert.match(authenticated.data.sessionKey, /^[A-Za-z0-9_-]+$/);
 
   const repeated = await injectedRequest(fixture.app, "GET", "/api/auth/session");
