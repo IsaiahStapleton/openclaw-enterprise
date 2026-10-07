@@ -1623,6 +1623,47 @@ test(
   },
 );
 
+test("the chart refuses installation names the bootstrap Job refuses", tooling, async () => {
+  const message =
+    /installation\.name must follow the Name rule: 1 to 200 characters, with no leading or trailing whitespace and no control characters or line or paragraph separators/;
+  for (const name of [
+    "",
+    " ",
+    " name",
+    "name ",
+    "name\nmore",
+    "a".repeat(201),
+    "名".repeat(201),
+    "\uFEFFname",
+    "name\u00A0",
+  ]) {
+    await assert.rejects(
+      render({ "installation.name": name }),
+      ({ code, stderr }) => code !== 0 && message.test(stderr),
+      JSON.stringify(name),
+    );
+  }
+  for (const name of [
+    "openclaw-enterprise",
+    "OpenClaw Local Development",
+    "a".repeat(200),
+    "名".repeat(200),
+    "a\uFEFFb",
+  ]) {
+    const objects = await resources((await render({ "installation.name": name })).stdout);
+    const bootstrap = objects.find(
+      ({ kind, metadata }) => kind === "Job" && metadata.name.endsWith("-initialization"),
+    );
+    assert.ok(
+      bootstrap.spec.template.spec.containers[0].env.some(
+        ({ name: envName, value }) =>
+          envName === "OCC_BOOTSTRAP_INSTALLATION_NAME" && value === name,
+      ),
+      JSON.stringify(name),
+    );
+  }
+});
+
 test(
   "the production Helm chart renders private least-privilege runtime and ordered bootstrap",
   tooling,
@@ -1712,6 +1753,12 @@ test(
       pod.containers[0].env.some(
         ({ name, value }) =>
           name === "OCC_BOOTSTRAP_ADMIN_EMAIL" && value === "admin@example.invalid",
+      ),
+    );
+    assert.ok(
+      pod.containers[0].env.some(
+        ({ name, value }) =>
+          name === "OCC_BOOTSTRAP_INSTALLATION_NAME" && value === "openclaw-enterprise",
       ),
     );
     assert.ok(
