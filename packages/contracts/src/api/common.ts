@@ -295,15 +295,20 @@ export const HarnessAuthBindingSchema = Type.Union([
     { additionalProperties: false },
   ),
   Type.Object(
-    { method: Type.Literal("codex_pat"), source: SecretReference },
+    {
+      method: Type.Literal("codex_pat"),
+      source: Type.Union([
+        SecretReference,
+        Type.Object(
+          { kind: Type.Literal("service_account"), namespaceId: NamespaceId, id: ServiceAccountId },
+          { additionalProperties: false },
+        ),
+      ]),
+    },
     { additionalProperties: false },
   ),
   Type.Object(
     { method: Type.Literal("oauth"), source: SecretReference },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    { method: Type.Literal("chatgpt_service_account"), serviceAccountId: ServiceAccountId },
     { additionalProperties: false },
   ),
   Type.Object(

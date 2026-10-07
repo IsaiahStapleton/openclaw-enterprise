@@ -148,7 +148,7 @@ Personal [Codex OAuth device login](../guides/deploy/credential-lifecycle.md#use
 is **Experimental**. Bind the returned `source` with `"method": "oauth"`.
 
 For an already issued ChatGPT account credential, use
-`{ "method": "chatgpt_service_account", "serviceAccountId": "sa_123e4567-e89b-42d3-a456-426614174000" }`.
+`{ "method": "codex_pat", "source": { "kind": "service_account", "namespaceId": "ns_123e4567-e89b-42d3-a456-426614174000", "id": "sa_123e4567-e89b-42d3-a456-426614174000" } }`.
 This requires dedicated Codex and the account's matching `backendId`. Binding
 an account does not issue its credential or change the model, Harness, or Backend.
 
