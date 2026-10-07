@@ -232,7 +232,10 @@ finish. An unknown or removed key returns `404`. Revoking an issuer’s key does
 not revoke other keys issued through it or delete a principal or its bindings.
 
 HTTP issuance and revocation emit [audit events](../../guides/topics/audit-log.md)
-with administrator and non-secret IDs. If issuance audit persistence fails, OCC
+with the caller, the principal ID, and the key's ID (`serviceKeyId`) and name
+(`serviceKeyName`). Every audit event for a request authenticated by a service
+key, including these and denials, names that key in `actorServiceKeyId`, so you
+can tell which of a principal's keys acted. If issuance audit persistence fails, OCC
 returns `503` without disclosing the key and attempts to remove it; this cleanup
 is best effort. A failed revocation audit returns `503` but does not restore the
 deleted key.
