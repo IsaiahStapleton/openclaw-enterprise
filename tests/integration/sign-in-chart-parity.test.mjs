@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   clientAddressConfiguration,
+  createControllerAuth,
   githubLoginConfiguration,
   humanLoginConfiguration,
   resolveClientAddress,
@@ -1040,6 +1041,64 @@ test("a null optional sign-in map renders like an absent one", tooling, async ()
       ).length,
       0,
       key,
+    );
+  }
+});
+
+// With native admin, the API refuses at startup a console origin outside the shared cookie
+// parent, or one without HTTPS (createControllerAuth, before any database read). The chart
+// refuses the same values at render time, and still renders what the API accepts.
+test("the chart refuses native admin base URLs the API refuses at startup", tooling, async () => {
+  const nativeAdmin = {
+    "gatewayRouting.enabled": "true",
+    "gatewayRouting.gatewayClassName": "private-envoy-gateway",
+    "gatewayRouting.apiKeySecretName": "occ-gateway-api-key",
+    "agentNativeAdmin.enabled": "true",
+    "agentNativeAdmin.domain": "agents.oce.example.com",
+    "agentNativeAdmin.sharedCookieDomain": "oce.example.com",
+  };
+  const apiRefusal = (baseUrl) => () =>
+    createControllerAuth({
+      mode: "production",
+      secret: "s".repeat(32),
+      baseURL: new URL(baseUrl).toString().replace(/\/$/, ""),
+      sharedCookieDomain: "oce.example.com",
+    });
+  for (const [baseUrl, chart, api] of [
+    [
+      "https://console.example.com",
+      /agentNativeAdmin\.sharedCookieDomain must contain the auth\.baseUrl host/,
+      /OCC_AUTH_COOKIE_DOMAIN must contain the OCC_AUTH_BASE_URL host/,
+    ],
+    [
+      "https://console-oce.example.com",
+      /agentNativeAdmin\.sharedCookieDomain must contain the auth\.baseUrl host/,
+      /OCC_AUTH_COOKIE_DOMAIN must contain the OCC_AUTH_BASE_URL host/,
+    ],
+    [
+      "http://console.oce.example.com",
+      /agentNativeAdmin\.enabled requires an HTTPS auth\.baseUrl/,
+      /OCC_AUTH_COOKIE_DOMAIN requires secure HTTPS session cookies/,
+    ],
+  ]) {
+    assert.match(await chartRefusal({ ...nativeAdmin, "auth.baseUrl": baseUrl }), chart, baseUrl);
+    assert.throws(apiRefusal(baseUrl), api, baseUrl);
+  }
+  for (const baseUrl of [
+    "https://oce.example.com",
+    "https://Console.OCE.example.com",
+    "https://console.oce.example.com.",
+    "https://console.oce.example.com:8443",
+    " https://console.oce.example.com ",
+  ]) {
+    // The API's cookie checks pass; it stops later, at the Installation it was not given.
+    assert.throws(apiRefusal(baseUrl), /Better Auth issuer requires an Installation/, baseUrl);
+    const objects = await renderChart({ ...nativeAdmin, "auth.baseUrl": baseUrl });
+    assert.ok(
+      deploymentEnv(objects, "api").some(
+        ({ name, value }) => name === "OCC_AUTH_BASE_URL" && value === baseUrl,
+      ),
+      baseUrl,
     );
   }
 });

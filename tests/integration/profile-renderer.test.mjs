@@ -643,6 +643,28 @@ test("preflight rejects metrics and native admin inputs that Helm would reject",
     }),
     /controlPlane.agentNativeAdminDomain must be inside controlPlane.sharedCookieDomain/,
   );
+
+  assertPreflightFailure(
+    "codex",
+    codexInput({
+      controlPlane: {
+        ...baseInput().controlPlane,
+        authBaseUrl: "https://console.example.internal",
+      },
+    }),
+    /controlPlane.authBaseUrl host must be inside controlPlane.sharedCookieDomain/,
+  );
+
+  assertPreflightFailure(
+    "codex",
+    codexInput({
+      controlPlane: {
+        ...baseInput().controlPlane,
+        authBaseUrl: "http://console.oce.example.internal",
+      },
+    }),
+    /controlPlane.authBaseUrl must use HTTPS with native admin/,
+  );
 });
 
 test("profiles pass an optional observability URL to Installation startup YAML", async () => {
