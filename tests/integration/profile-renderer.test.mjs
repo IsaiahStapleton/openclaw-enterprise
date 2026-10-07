@@ -674,6 +674,10 @@ test("preflight rejects metrics and native admin inputs that Helm would reject",
     "https://admin@console.oce.example.internal",
     "ftp://console.oce.example.internal",
     "console.oce.example.internal",
+    // Stricter than the API, like the chart: URL parsing repairs these into an origin.
+    "https:console.oce.example.internal",
+    "https://console.oce.example.internal/.",
+    "https://console.oce.example.internal/%2e",
   ]) {
     assertPreflightFailure(
       "codex",

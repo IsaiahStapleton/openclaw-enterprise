@@ -196,7 +196,11 @@ function asString(source, path, diagnostics, { pattern, validate, description } 
 }
 
 // The API and the bootstrap Job accept only an absolute HTTP(S) origin (validHttpBaseURL).
+// Like the chart, this also refuses spellings URL parsing repairs: https:host, /. and /%2e.
 function httpOrigin(value) {
+  if (!/^https?:\/\/[^/?#]*\/?(?:[?#].*)?$/i.test(value.trim())) {
+    return false;
+  }
   let url;
   try {
     url = new URL(value);
