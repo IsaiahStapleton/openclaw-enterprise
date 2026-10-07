@@ -432,7 +432,7 @@ async function createFixture(context, options = {}) {
         identity.issuer.endsWith(":better-auth") &&
         identity.subject === current.data.user.id,
     );
-    assert.equal(principals.length, 1, "the bootstrapped administrator Principal must exist");
+    assert.equal(principals.length, 1, "exactly one Principal must match the signed-in account");
     return principals[0].id;
   }
 

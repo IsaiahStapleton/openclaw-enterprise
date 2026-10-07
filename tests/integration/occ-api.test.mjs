@@ -4024,7 +4024,13 @@ test("session inspection stays optional and never exposes session or credential 
     const value = pair.slice(pair.indexOf("=") + 1).trim();
     assert.ok(value.length > 0);
     assert.equal(exposed.includes(value), false);
-    assert.equal(exposed.includes(decodeURIComponent(value)), false);
+    const decoded = decodeURIComponent(value);
+    assert.equal(exposed.includes(decoded), false);
+    // A signed cookie value is "<token>.<signature>"; the bare token is a secret too.
+    const signature = decoded.lastIndexOf(".");
+    if (signature > 0) {
+      assert.equal(exposed.includes(decoded.slice(0, signature)), false);
+    }
   }
   assert.equal(exposed.includes(fixture.authFixture.password), false);
   assert.match(authenticated.data.sessionKey, /^[A-Za-z0-9_-]+$/);
