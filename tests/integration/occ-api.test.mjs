@@ -4910,16 +4910,28 @@ test("Agent provisioning API validates inline configuration with existing Secret
       404,
     ],
   ];
-  for (const [description, body] of planRefusals) {
-    const denied = await injectedRequest(
-      fixture.app,
-      "POST",
-      `/namespaces/${namespace.data.id}/agents/provision`,
-      { body },
-    );
-    assert.equal(denied.status, 403, `${description}: ${JSON.stringify(denied.body)}`);
-    assert.equal(denied.body.error.code, "FORBIDDEN", description);
-  }
+  const assertPlanRefusalsDenied = async (grant) => {
+    for (const [description, body] of planRefusals) {
+      const denied = await injectedRequest(
+        fixture.app,
+        "POST",
+        `/namespaces/${namespace.data.id}/agents/provision`,
+        { body },
+      );
+      assert.equal(denied.status, 403, `${grant}, ${description}: ${JSON.stringify(denied.body)}`);
+      assert.equal(denied.body.error.code, "FORBIDDEN", `${grant}, ${description}`);
+    }
+  };
+  await assertPlanRefusalsDenied("without Agent create");
+  fixture.state.restrictions.pop();
+  // Installation administer used to be checked only after the plan was validated and stored.
+  fixture.state.restrictions.push({
+    id: "deny-provisioning-installation-administer",
+    resourceKind: "installation",
+    action: "administer",
+    effect: "deny",
+  });
+  await assertPlanRefusalsDenied("without Installation administer");
   fixture.state.restrictions.pop();
   for (const [description, body, status] of planRefusals) {
     const refused = await injectedRequest(
