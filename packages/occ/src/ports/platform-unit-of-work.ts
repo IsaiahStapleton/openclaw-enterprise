@@ -115,6 +115,9 @@ export function bindPlatformUnitOfWork(
       "listRestrictionsTargeting",
       "createAccessBinding",
       "deleteAccessBinding",
+      "listServicePrincipals",
+      "getServicePrincipal",
+      "createServicePrincipal",
     ]),
     repositorySessions: bindRepository(repositories.repositorySessions, lifetime, [
       "findAttempt",

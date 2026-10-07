@@ -41,6 +41,7 @@ import type {
   SecretBindings,
   ServiceAccount,
   ServiceAccountCredential,
+  ServicePrincipal,
 } from "@openclaw-enterprise/contracts";
 import {
   harnessAuthBindingFromSnapshot,
@@ -3373,6 +3374,13 @@ export class PostgresPlatformState implements PlatformStateStore {
       });
     };
 
+    const servicePrincipalFromRow = (row: PostgresRow): Readonly<ServicePrincipal> =>
+      Object.freeze({
+        kind: "service_principal",
+        id: text(row, "id"),
+        namespaceId: text(row, "namespace_id"),
+      });
+
     const accessBindingFromRow = (row: PostgresRow): Readonly<AccessBinding> => {
       const namespaceId = optionalText(row, "namespace_id");
       const resourceKind = optionalText(row, "resource_kind");
@@ -3619,6 +3627,52 @@ export class PostgresPlatformState implements PlatformStateStore {
           [namespaceId, bindingId],
         );
         return deleted.rowCount === 1;
+      },
+      listServicePrincipals: async (namespaceId) =>
+        Object.freeze(
+          rows(
+            (
+              await client.query(
+                `SELECT id, namespace_id FROM occ.iam_identities
+                 WHERE kind = 'service_principal' AND namespace_id = $1 AND agent_id IS NULL
+                 ORDER BY id`,
+                [namespaceId],
+              )
+            ).rows,
+          ).map(servicePrincipalFromRow),
+        ),
+      getServicePrincipal: async (namespaceId, servicePrincipalId) => {
+        const found = rows(
+          (
+            await client.query(
+              `SELECT id, namespace_id FROM occ.iam_identities
+               WHERE kind = 'service_principal' AND namespace_id = $1 AND agent_id IS NULL
+                 AND id = $2`,
+              [namespaceId, servicePrincipalId],
+            )
+          ).rows,
+        )[0];
+        return found === undefined ? undefined : servicePrincipalFromRow(found);
+      },
+      createServicePrincipal: async (servicePrincipal) => {
+        await this.requireInitialized(context);
+        const namespace = await namespaces.lockNamespace(servicePrincipal.namespaceId ?? "");
+        if (
+          namespace === undefined ||
+          (namespace.status !== "provisioning" && namespace.status !== "ready") ||
+          servicePrincipal.namespaceId !== namespace.id ||
+          servicePrincipal.agentId !== undefined
+        ) {
+          throw new ScopeViolationError(
+            "The ServicePrincipal must belong to an available Namespace.",
+          );
+        }
+        await client.query(
+          `INSERT INTO occ.iam_identities (id, namespace_id, agent_id, kind, issuer, subject)
+           VALUES ($1, $2, NULL, 'service_principal', NULL, NULL)`,
+          [servicePrincipal.id, namespace.id],
+        );
+        return servicePrincipalFromRow({ id: servicePrincipal.id, namespace_id: namespace.id });
       },
     };
 
