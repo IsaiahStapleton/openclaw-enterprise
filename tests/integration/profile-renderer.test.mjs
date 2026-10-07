@@ -679,12 +679,15 @@ test("preflight rejects metrics and native admin inputs that Helm would reject",
     "https://console.oce.example.internal/.",
     "https://console.oce.example.internal/%2e",
     // Like the chart: Unicode spaces and invisible characters at either end, which URL
-    // parsing keeps (it strips only C0 controls and spaces).
+    // parsing keeps (it strips only C0 controls and spaces). URL parsing already refuses most
+    // of these, and a trailing unassigned code point (U+0378); a trailing U+FEFF or U+200B,
+    // which the host parser drops, is refused by the edge rule alone.
     ...["\u00a0", "\u2003", "\u3000", "\ufeff", "\u200b"].flatMap((space) => [
       `${space}https://console.oce.example.internal`,
       `https://console.oce.example.internal${space}`,
       ` ${space}https://console.oce.example.internal${space} `,
     ]),
+    "https://console.oce.example.internal\u0378",
   ]) {
     assertPreflightFailure(
       "codex",

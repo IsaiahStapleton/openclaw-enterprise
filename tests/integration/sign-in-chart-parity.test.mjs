@@ -1216,7 +1216,14 @@ test(
       // URL parsing strips only C0 controls and spaces from the ends, so other Unicode spaces
       // and invisible characters there reach the parser, which refuses them in the scheme or a
       // host. The chart refuses them all; it is deliberately stricter for U+FEFF and U+200B at
-      // the end, which the host parser drops.
+      // the end, which the host parser drops. A trailing unassigned code point (U+0378), which
+      // RE2's \p{C} does not cover, is refused too.
+      {
+        baseUrl: "https://console.oce.example.internal\u0378",
+        chart: unicodeEdge,
+        api: false,
+        job: false,
+      },
       ...[
         ["\u00a0", false],
         ["\u2003", false],

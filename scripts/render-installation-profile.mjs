@@ -211,11 +211,12 @@ function stripUrlEdges(value) {
 // The API and the bootstrap Job accept only an absolute HTTP(S) origin (validHttpBaseURL).
 // Like the chart, this also refuses spellings URL parsing repairs: https:host, /. and /%2e,
 // and other Unicode spaces or invisible characters at either end (NBSP, U+3000, U+FEFF,
-// U+200B), which the API's parser keeps and mostly refuses.
+// U+200B), which the API's parser keeps and mostly refuses. Both ends must be a letter, mark,
+// number, punctuation or symbol, as in the chart.
 function httpOrigin(value) {
   const stripped = stripUrlEdges(value);
   if (
-    /^[\p{Z}\p{C}]|[\p{Z}\p{C}]$/u.test(stripped) ||
+    /^[^\p{L}\p{M}\p{N}\p{P}\p{S}]|[^\p{L}\p{M}\p{N}\p{P}\p{S}]$/u.test(stripped) ||
     !/^https?:\/\/[^/?#]*\/?(?:[?#].*)?$/i.test(stripped)
   ) {
     return false;
