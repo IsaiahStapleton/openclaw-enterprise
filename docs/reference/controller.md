@@ -197,6 +197,17 @@ worker does not expose an HTTP health endpoint.
   `AUTH_BASE_URL_INVALID` for an `OCC_AUTH_COOKIE_DOMAIN` that is malformed, a
   public suffix, does not contain the base URL host, or is used without HTTPS
   session cookies.
+- **`GATEWAY_API_KEY_UNAVAILABLE` at startup:** The API refuses an
+  `OCC_GATEWAY_API_KEY_PATH` that is blank or not absolute, and a key file that
+  is missing, not a regular file, over 4 KiB, or not printable ASCII without
+  spaces (a trailing newline counts). Native admin without the path reports
+  this code too. Helm mounts the file from `gatewayRouting.apiKeySecretName`;
+  see [gateway routing](gateway-routing.md#service-key-and-native-identity).
+- **`STARTUP_FAILED` with GitHub, Google or OIDC sign-in:** These providers
+  support host-only cookies only. With native admin enabled and
+  `OCC_AUTH_COOKIE_DOMAIN` set, the API stops with this generic code after it
+  connects to the database. Turn off native admin; the chart refuses it with
+  these providers.
 - **Configuration operations fail:** Verify exact Namespace or Configuration
   authorization, tenant-local ConfigMap CRUD, and a native JSON configuration
   document;
