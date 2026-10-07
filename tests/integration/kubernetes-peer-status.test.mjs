@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
-import { reservePort, reservedPortChild } from "../helpers/available-port.mjs";
+import { reservePort, reservedPortArgs } from "../helpers/available-port.mjs";
+import { waitFor } from "../helpers/wait-for.mjs";
 import { PLUGIN_RUNTIME_HELPERS } from "../../apps/controller/src/drivers/compute/kubernetes/runtime-entrypoints.ts";
 
 const execute = promisify(execFile);
@@ -41,7 +42,6 @@ test("real peer-status HTTPS transport authenticates its revision and verifies s
   const reservation = await reservePort({ host: "0.0.0.0" });
   t.after(reservation.release);
   const { port } = reservation;
-  const reserved = reservedPortChild(reservation);
   const environment = {
     PATH: process.env.PATH,
     OPENCLAW_PLUGIN_STATUS_PORT: String(port),
@@ -57,25 +57,26 @@ test("real peer-status HTTPS transport authenticates its revision and verifies s
     `${PLUGIN_RUNTIME_HELPERS}\nstartPluginRuntimeStatusServer();\npublishPluginRuntimeStatus({phase:"ready",successfulPluginIds:["plugin-one"],failures:[]});\nprocess.send("ready");`,
   );
   const child = fork(serverFile, {
-    env: { ...environment, ...reserved.env },
-    execArgv: [...process.execArgv, ...reserved.execArgv],
+    env: environment,
+    execArgv: [...process.execArgv, ...reservedPortArgs(reservation)],
     stdio: ["ignore", "ignore", "pipe", "ipc"],
   });
   t.after(() => child.kill("SIGTERM"));
   await once(child, "message");
   // "ready" follows listen() before the bind completes. A 401 can only come from the status
   // server (the reservation resets connections), so it is bound and the hold can end.
-  const deadline = Date.now() + 10_000;
-  for (;;) {
-    const status = await fetch(`http://127.0.0.1:${port}/openclaw/plugin-runtime/remote-status`)
-      .then((response) => response.status)
-      .catch(() => undefined);
-    if (status === 401) {
-      break;
-    }
-    assert.ok(Date.now() < deadline, `the status server never answered (last: ${status})`);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
+  await waitFor(
+    "the status server to answer on its port",
+    () =>
+      fetch(`http://127.0.0.1:${port}/openclaw/plugin-runtime/remote-status`).then(
+        async (response) => {
+          await response.body?.cancel();
+          return response.status === 401 || undefined;
+        },
+        () => undefined,
+      ),
+    10_000,
+  );
   await reservation.release();
 
   // TLS termination forwards the untouched Authorization header to the actual

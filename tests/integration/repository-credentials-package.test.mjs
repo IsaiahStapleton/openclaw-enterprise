@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { reservePort, reservedPortChild } from "../helpers/available-port.mjs";
+import { reservePort, reservedPortArgs } from "../helpers/available-port.mjs";
 
 const root = resolve(".");
 
@@ -239,11 +239,10 @@ test(
       );
     }
     // A started development service names its authority and token class, never the token.
-    const developmentChild = reservedPortChild(developmentReservation);
     const development = spawn(
       process.execPath,
       [
-        ...developmentChild.execArgv,
+        ...reservedPortArgs(developmentReservation),
         join(runtime, "dist/repository-credentials.js"),
         "--config",
         tokenConfiguration,
@@ -251,7 +250,7 @@ test(
       ],
       {
         cwd: runtime,
-        env: { ...developmentChild.env, PATH: process.env.PATH },
+        env: { PATH: process.env.PATH },
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
@@ -289,18 +288,17 @@ test(
       JSON.parse(await readFile(join(client, "package.json"), "utf8")).dependencies ?? {},
       {},
     );
-    const serviceChild = reservedPortChild(serviceReservation);
     const service = spawn(
       process.execPath,
       [
-        ...serviceChild.execArgv,
+        ...reservedPortArgs(serviceReservation),
         join(runtime, "dist/repository-credentials.js"),
         "--config",
         configuration,
       ],
       {
         cwd: runtime,
-        env: { ...serviceChild.env, PATH: process.env.PATH },
+        env: { PATH: process.env.PATH },
         stdio: ["ignore", "pipe", "pipe"],
         timeout: 15000,
       },

@@ -18,7 +18,7 @@ import {
   kubernetesHash,
   validateExplicitK3dLoopbackContext,
 } from "../helpers/kubernetes-real.mjs";
-import { reservePort, reservedPortChild } from "./available-port.mjs";
+import { reservePort, reservedPortArgs } from "./available-port.mjs";
 import { stopProcess } from "./stop-process.mjs";
 
 const repository = fileURLToPath(new URL("../..", import.meta.url));
@@ -377,7 +377,6 @@ async function startController(context, { kubernetesDrivers = false } = {}) {
   const reservation = await reservePort();
   context.after(reservation.release);
   const { port } = reservation;
-  const reserved = reservedPortChild(reservation);
   const driverEnvironment = await configuredDriverEnvironment(context, kubernetesDrivers);
   const configurationRoot = await mkdtemp(join(tmpdir(), "openclaw-postgres-configurations-"));
   context.after(async () => {
@@ -391,11 +390,10 @@ async function startController(context, { kubernetesDrivers = false } = {}) {
     authBaseURL: `http://127.0.0.1:${port}`,
     installationName: "PostgreSQL platform state integration",
   });
-  const child = spawn(process.execPath, [...reserved.execArgv, entrypoint], {
+  const child = spawn(process.execPath, [...reservedPortArgs(reservation), entrypoint], {
     cwd: repository,
     env: {
       ...process.env,
-      ...reserved.env,
       NODE_ENV: "development",
       OCC_HOST: "127.0.0.1",
       OCC_PORT: String(port),

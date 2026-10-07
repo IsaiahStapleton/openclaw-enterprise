@@ -23,7 +23,8 @@ export async function availablePort({ host = "127.0.0.1" } = {}) {
 // real listener is up. Where the platform has no SO_REUSEPORT for Node (macOS), `reusePort`
 // is false and the port is released at once, as availablePort() does. While both sockets
 // listen the kernel may hand a connection to either, so release right after the bind.
-// Pass `port` to hold a port that a listener bound with `reusePort` still holds, so it stays
+// Reserve on exactly the host the listener binds: a more specific address (127.0.0.1 next
+// to a 0.0.0.0 listener) takes every connection. Pass `port` to hold a port that a listener bound with `reusePort` still holds, so it stays
 // held across that listener's restart: reserve, close the listener, bind the new one, release.
 export async function reservePort({ host = "127.0.0.1", port: wanted = 0 } = {}) {
   // A connection that still reaches the reservation is reset rather than left hanging.
@@ -52,19 +53,15 @@ export async function reservePort({ host = "127.0.0.1", port: wanted = 0 } = {})
   };
 }
 
-const reusePortPreload = new URL("./reuse-port-preload.mjs", import.meta.url).href;
-
-// Lets a Node child process bind a reserved port: spread `execArgv` before its entrypoint
-// and `env` into its environment. The child then preloads reuse-port-preload.mjs, which
-// adds `reusePort` to its own listen() on exactly these ports. Without SO_REUSEPORT the
-// reservations hold nothing, and the child runs unchanged.
-export function reservedPortChild(...reservations) {
-  const ports = reservations.filter((reservation) => reservation.reusePort);
-  if (ports.length === 0) {
-    return { execArgv: [], env: {} };
+// Node arguments that let a child process bind a reservation's port: pass them before the
+// child's entrypoint. The child preloads reuse-port-preload.mjs, which adds `reusePort` to
+// its own listen() on that port only. Without SO_REUSEPORT the reservation holds nothing,
+// so there are no arguments and the child runs unchanged.
+export function reservedPortArgs(reservation) {
+  if (!reservation.reusePort) {
+    return [];
   }
-  return {
-    execArgv: ["--import", reusePortPreload],
-    env: { OPENCLAW_TEST_REUSE_PORTS: ports.map((reservation) => reservation.port).join(",") },
-  };
+  const preload = new URL("./reuse-port-preload.mjs", import.meta.url);
+  preload.searchParams.set("port", String(reservation.port));
+  return ["--import", preload.href];
 }
