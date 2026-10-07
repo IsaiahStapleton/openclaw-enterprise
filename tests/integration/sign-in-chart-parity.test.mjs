@@ -389,7 +389,38 @@ test(
       jwksUrl: "https://sso.example.com/realms/acme/protocol/openid-connect/certs",
     };
     const extra = { tokenAuth: "client_secret_basic", displayName: "Acme SSO" };
+    // The API trims each URL with JavaScript's trim (ASCII whitespace, Unicode spaces, U+2028,
+    // U+2029 and U+FEFF) before its checks, and so does the chart. The env keeps the value as
+    // written, and the API reads the trimmed one.
+    const padded = {
+      issuer: ` \u000b${fixtureOidcIssuer.issuer}\f `,
+      authorizationUrl: `\t${fixtureOidcIssuer.authorizationUrl}\u00a0`,
+      tokenUrl: `\u3000${fixtureOidcIssuer.tokenUrl}\ufeff`,
+      jwksUrl: `\u2028${fixtureOidcIssuer.jwksUrl}\u2003 `,
+    };
+    // An issuer without a path ends at its host, so trailing padding there must be trimmed too.
+    const bare = {
+      issuer: "https://sso.example.com",
+      authorizationUrl: "https://sso.example.com/authorize",
+      tokenUrl: "https://sso.example.com/token",
+      jwksUrl: "https://sso.example.com/jwks",
+    };
+    const paddedBare = { ...bare, issuer: `${bare.issuer}\ufeff\u2029` };
     const cases = [
+      {
+        label: "OIDC, URLs padded with whitespace the API trims",
+        values: oidcUpgradeValues(recoveryUserId, padded),
+        settings: oidcUpgradeSettings(recoveryUserId, padded),
+        parsed: { oidc },
+        egress: ["oidc"],
+      },
+      {
+        label: "OIDC, an issuer without a path, padded with whitespace the API trims",
+        values: oidcUpgradeValues(recoveryUserId, paddedBare),
+        settings: oidcUpgradeSettings(recoveryUserId, paddedBare),
+        parsed: { oidc: { ...oidc, ...bare } },
+        egress: ["oidc"],
+      },
       {
         label: "OIDC only",
         values: oidcUpgradeValues(recoveryUserId),
@@ -771,6 +802,8 @@ const invalid = [
     ["an issuer with an explicit port 443", "issuer", "https://tenant.idp.example.test:443/"],
     ["an IP-address issuer", "issuer", "https://203.0.113.10/"],
     ["an issuer with a query", "issuer", "https://tenant.idp.example.test/?t=1"],
+    // JavaScript's trim keeps U+0085, though Go's TrimSpace strips it.
+    ["an issuer padded with U+0085", "issuer", "\u0085https://tenant.idp.example.test/"],
   ].map(([name, key, value]) => ({
     name: `OIDC with ${name}`,
     values: { ...oidcUpgradeValues(recoveryUserId), [`auth.oidc.${key}`]: value },
@@ -1174,6 +1207,7 @@ test(
     const plainHttp = /auth\.baseUrl must use HTTPS unless its host is 127\.0\.0\.1 or localhost/;
     const unicodeEdge =
       /auth\.baseUrl must not begin or end with Unicode spaces or invisible characters/;
+    const unicodeInside = /auth\.baseUrl must not contain spaces, invisible characters, < or >/;
     const cases = [
       ...[
         "https://console.oce.example.internal/occ",
@@ -1242,6 +1276,32 @@ test(
           job: accepted,
         })),
       ),
+      // Inside the host, the parser refuses spaces, < and >, and drops tabs and most invisible
+      // characters. The chart refuses them all (deliberately stricter for the dropped ones),
+      // but keeps the joiners U+200C and U+200D that some IDN labels need.
+      ...[
+        [" ", false],
+        ["\u00a0", false],
+        ["\u2003", false],
+        ["\u3000", false],
+        ["\u2028", false],
+        // Go's URL parser keeps these, but the API's refuses them.
+        ["<", false],
+        [">", false],
+        ["\t", true],
+        ["\ufeff", true],
+        ["\u200b", true],
+        ["\u00ad", true],
+      ].map(([space, accepted]) => ({
+        baseUrl: `https://console${space}.oce.example.internal`,
+        chart: unicodeInside,
+        api: accepted,
+        job: accepted,
+      })),
+      ...[
+        "https://\u0646\u0627\u0645\u0647\u200c\u0627\u06cc.oce.example.internal",
+        "https://\u0915\u094d\u200d\u0937.oce.example.internal",
+      ].map((baseUrl) => ({ baseUrl, chart: undefined, api: true, job: true })),
       // The API serves plain HTTP anywhere, but the bootstrap Job refuses it off loopback.
       ...[
         "http://console.oce.example.internal",
