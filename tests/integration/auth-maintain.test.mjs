@@ -55,7 +55,10 @@ test("auth:maintain requires an explicit writers-stopped claim for every change"
     assert.throws(() => parseAuthMaintainArguments([command]), /Unknown command/);
   }
   for (const args of [[], ["--"]]) {
-    assert.throws(() => parseAuthMaintainArguments(args), /^AuthMaintainUsageError: Unknown command: \(none\)\.\n/);
+    assert.throws(
+      () => parseAuthMaintainArguments(args),
+      /^AuthMaintainUsageError: Unknown command: \(none\)\.\n/,
+    );
   }
   assert.deepEqual(
     parseAuthMaintainArguments(["--", "purge-sessions", "--user", "u2", "--writers-stopped"]),
