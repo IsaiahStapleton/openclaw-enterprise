@@ -38,7 +38,10 @@ test(
       harnessId: "codex",
       executionMode: "dedicated",
       name: `codex-calendar-plugin-${randomUUID()}`,
-      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
+      harnessAuth: {
+        method: "codex_pat",
+        source: { kind: "service_account", namespaceId: account.namespaceId, id: account.id },
+      },
       backendId: "openai",
     });
     await verifyCalendarReviewPolicy(fixture, agent, credential);
@@ -410,7 +413,10 @@ test(
       harnessId: "codex",
       executionMode: "dedicated",
       name: `codex-linear-plugin-${randomUUID()}`,
-      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
+      harnessAuth: {
+        method: "codex_pat",
+        source: { kind: "service_account", namespaceId: account.namespaceId, id: account.id },
+      },
       backendId: "openai",
     });
     await fixture.selectPlugin(agent.id, {
@@ -505,14 +511,20 @@ test(
       harnessId: "codex",
       executionMode: "dedicated",
       name: `cpf-primary-${randomUUID().slice(0, 8)}`,
-      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
+      harnessAuth: {
+        method: "codex_pat",
+        source: { kind: "service_account", namespaceId: account.namespaceId, id: account.id },
+      },
       backendId: "openai",
     });
     const sibling = await fixture.createAgent({
       harnessId: "codex",
       executionMode: "dedicated",
       name: `cpf-sibling-${randomUUID().slice(0, 8)}`,
-      harnessAuth: { method: "chatgpt_service_account", serviceAccountId: account.id },
+      harnessAuth: {
+        method: "codex_pat",
+        source: { kind: "service_account", namespaceId: account.namespaceId, id: account.id },
+      },
       backendId: "openai",
     });
 
