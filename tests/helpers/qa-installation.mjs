@@ -496,7 +496,11 @@ export async function createQaInstallation(context, controlPlane, artifacts) {
     return namespace?.status === "ready" && namespace;
   });
   f.presets = await f.api("GET", `/namespaces/${f.defaultNamespace.id}/presets`);
-  assert.deepEqual(f.presets.map((p) => p.name).sort(), ["Standard Codex", "Standard OpenClaw"]);
+  assert.deepEqual(f.presets.map((p) => p.name).sort(), [
+    "Standard Codex",
+    "Standard OpenClaw",
+    "default-codex",
+  ]);
   f.configuration = loadYaml(await readFile(join(stateDirectory, "installation.yaml"), "utf8"));
   f.namespace = f.defaultNamespace;
   if (controlPlane === "compose") {
