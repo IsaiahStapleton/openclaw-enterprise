@@ -1156,14 +1156,17 @@ test("Namespace IAM refuses bindings whose Role cannot apply to the target", asy
     });
 
   // Role creation now refuses create Permissions, but Roles stored before that refusal can
-  // still hold them. Binding one is the dogfood "share the Namespace" attempt: create is
-  // authorized against the Namespace, never an exact resource, so these Permissions would
-  // be silently dropped at evaluation.
-  const storedRole = (id, permissions) => {
-    fixture.state.roles.push({ id, namespaceId: namespace.id, permissions });
+  // still hold them; write one straight to the policy State, as the earlier API did.
+  // Binding it is the dogfood "share the Namespace" attempt: create is authorized against
+  // the Namespace, never an exact resource, so these Permissions would be silently dropped
+  // at evaluation.
+  const storedRole = async (id, permissions) => {
+    await fixture.platformState.transact((unit) =>
+      unit.iamPolicy.createRole({ id, namespaceId: namespace.id, permissions }),
+    );
     return id;
   };
-  const creator = storedRole("role-stored-creator", [
+  const creator = await storedRole("role-stored-creator", [
     { action: "read", resourceKind: "namespace" },
     { action: "create", resourceKind: "agent" },
     { action: "create", resourceKind: "configuration" },
@@ -1184,7 +1187,7 @@ test("Namespace IAM refuses bindings whose Role cannot apply to the target", asy
   }
 
   // A long list of create Permissions is shortened so the guidance still fits the cap.
-  const manyCreates = storedRole(
+  const manyCreates = await storedRole(
     `role_${randomUUID()}`,
     ["agent", "configuration", "credential_source", "preset", "secret", "service_account"].map(
       (resourceKind) => ({ action: "create", resourceKind }),
