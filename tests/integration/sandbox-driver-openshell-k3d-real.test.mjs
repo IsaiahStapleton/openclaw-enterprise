@@ -146,6 +146,7 @@ const {
   assertGatewayBootstrapPolicies,
   assertNoSecretBytes,
   requestCodexTurnFromGatewayPod,
+  requestCodexTurnFromOpenShellHarnessPod,
   startGatewayPortForward,
 } = fixture;
 
@@ -1877,10 +1878,7 @@ async function prepareProductionInstallation(
   }
   // A cluster-internal echo service stands in for a protected non-model API. Only curl may
   // carry a non-model source's credential to it.
-  const tokenEcho =
-    harnessId === "codex" && !expectUnsupportedProjection
-      ? await startTokenEcho(context)
-      : undefined;
+  const tokenEcho = harnessId === "codex" ? await startTokenEcho(context) : undefined;
   if (tokenEcho !== undefined) {
     configuration.drivers.credential_gateway.configuration.toolBinaries = ["/usr/bin/curl"];
   }
