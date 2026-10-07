@@ -85,7 +85,14 @@ export type HumanAuthenticationDenial =
   | "SESSION_REJECTED"
   | "PROVIDER_UNAVAILABLE"
   | "MEMBERSHIP_REQUIRED"
-  | "MEMBERSHIP_UNAVAILABLE";
+  | "MEMBERSHIP_UNAVAILABLE"
+  | "ACCOUNT_DISABLED";
+
+/**
+ * An external identity attached to a disabled account. Only the person the provider just
+ * authenticated as that identity learns it; any other refusal stays indistinguishable.
+ */
+export const DISABLED_EXTERNAL_ACCOUNT = Object.freeze({ disabled: true as const });
 
 /** A duplicate account email; the caller maps it to its own conflict response. */
 export class UserAlreadyExistsError extends ResourceConflictError {
@@ -578,6 +585,8 @@ export class PostgresHumanAuthentication {
       if (user === undefined) {
         return undefined;
       }
+      // A password proves no identity before it is checked, so a disabled account is refused
+      // like a wrong password.
       return this.snapshot(unit, user, "credential");
     });
   }
@@ -586,7 +595,7 @@ export class PostgresHumanAuthentication {
     providerId: string,
     subject: string,
     attemptCreatedAt?: Date,
-  ): Promise<HumanAuthenticationSnapshot | undefined> {
+  ): Promise<HumanAuthenticationSnapshot | typeof DISABLED_EXTERNAL_ACCOUNT | undefined> {
     if (providerId === "credential") {
       return undefined;
     }
@@ -600,7 +609,9 @@ export class PostgresHumanAuthentication {
         return undefined;
       }
       const user = await this.lockUser(unit, method.user_id as string);
-      return this.snapshot(unit, user, providerId, subject, attemptCreatedAt);
+      // The identity is attached to this user, so a disabled account may say so; every other
+      // refusal (unenrolled, a changed method) stays generic.
+      return this.snapshotOrDisabled(unit, user, providerId, subject, attemptCreatedAt);
     });
   }
 
@@ -611,6 +622,23 @@ export class PostgresHumanAuthentication {
     subject?: string,
     attemptCreatedAt?: Date,
   ): Promise<HumanAuthenticationSnapshot | undefined> {
+    const snapshot = await this.snapshotOrDisabled(
+      unit,
+      user,
+      providerId,
+      subject,
+      attemptCreatedAt,
+    );
+    return snapshot !== undefined && "disabled" in snapshot ? undefined : snapshot;
+  }
+
+  private async snapshotOrDisabled(
+    unit: PlatformUnitOfWork,
+    user: Row,
+    providerId: string,
+    subject?: string,
+    attemptCreatedAt?: Date,
+  ): Promise<HumanAuthenticationSnapshot | typeof DISABLED_EXTERNAL_ACCOUNT | undefined> {
     const [association] = await this.query(
       unit,
       `SELECT 1 FROM occ.human_authentication_accounts WHERE user_id = $1`,
@@ -622,7 +650,7 @@ export class PostgresHumanAuthentication {
     }
     const account = await this.enrolled(unit, user.user_id as string);
     if (account.disabled !== false) {
-      return undefined;
+      return account.disabled === true ? DISABLED_EXTERNAL_ACCOUNT : undefined;
     }
     const methods = await this.query(
       unit,
@@ -1270,6 +1298,7 @@ export class PostgresHumanAuthentication {
         "PROVIDER_UNAVAILABLE",
         "MEMBERSHIP_REQUIRED",
         "MEMBERSHIP_UNAVAILABLE",
+        "ACCOUNT_DISABLED",
       ].includes(reason) ||
       (provider !== undefined && !["github", "google", "oidc"].includes(provider)) ||
       (membership ? !githubSubject : identity !== undefined)

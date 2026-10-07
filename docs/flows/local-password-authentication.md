@@ -203,8 +203,8 @@ it. A malformed, unbound, replayed, or expired callback is refused by
 `refuseUnmatched`, which writes no audit event and increments
 [`occ_sign_in_unmatched_callbacks_total`](../reference/metrics.md#application-families).
 Denials after `consumeAttempt` matches are audited as
-[`PROVIDER_UNAVAILABLE`](../reference/authentication/external-sign-in.md#github-sign-in-for-existing-accounts)
-or `EXTERNAL_IDENTITY_REJECTED`; with GitHub's
+[`PROVIDER_UNAVAILABLE`](../reference/authentication/external-sign-in.md#github-sign-in-for-existing-accounts),
+`EXTERNAL_IDENTITY_REJECTED`, or `ACCOUNT_DISABLED` for an attached identity's disabled account; with GitHub's
 [allowlist](../reference/authentication/external-sign-in.md#organization-and-team-allowlist),
 `apps/controller/src/auth/github.ts:githubMembership` runs between `GET /user` and the account
 lookup and adds `MEMBERSHIP_REQUIRED` and `MEMBERSHIP_UNAVAILABLE`, whose response code the
@@ -339,6 +339,8 @@ Account creation issues no session and infers no grants.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-07 12:00: Refuse a disabled account's attached identity as `ACCOUNT_DISABLED`. (fix-member-1007/d534)
 
 - 2026-10-06 07:30: Reject undeclared maintenance commands before configuration. (authoring-run/8f5b1566-4538-437c-8e8a-fd2049050c6e - 4bacc7925fcef75ea8715905a0c6c86abb7203d2)
 

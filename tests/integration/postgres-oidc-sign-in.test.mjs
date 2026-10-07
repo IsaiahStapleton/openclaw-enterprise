@@ -98,7 +98,7 @@ test(
     const denials = (reason) => loginDenialCount(state, reason, "oidc");
     const attach = (userId, subject, provider = "oidc") =>
       attachProvider(app, adminHeaders, userId, provider, subject);
-    const assertRefused = (authorization, message, reason) =>
+    const assertRefused = (authorization, message, reason, consoleReason) =>
       assertExternalSignInRefused(
         {
           pool,
@@ -108,6 +108,7 @@ test(
         },
         message,
         reason,
+        consoleReason,
       );
     async function assertSignIn(subject, userId, extra = {}) {
       const signIn = await oidcSignIn(app, origin, idp, { subject, ...extra }, address());
@@ -310,7 +311,14 @@ test(
       });
       assert.equal(disable.statusCode, 200, disable.body);
       assert.equal(await currentSession(app, cookie), null);
-      await assertRefused({ subject: disabledSubject }, "disabled account");
+      // The IdP proved this identity, and it is attached: the person is told the account is
+      // disabled rather than to retry or ask for an attach. Only their own browser gets this.
+      await assertRefused(
+        { subject: disabledSubject },
+        "disabled account",
+        "ACCOUNT_DISABLED",
+        "account-disabled",
+      );
     });
 
     await t.test("the coverage report drops accounts once their identity is attached", async () => {
