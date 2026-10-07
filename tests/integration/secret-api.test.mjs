@@ -599,7 +599,18 @@ test("Secret API stores values through the selected driver and returns metadata 
     `/namespaces/${namespace.id}/secrets/${created.data.id}`,
   );
   assert.equal(detail.status, 200);
-  assert.deepEqual(detail.data, created.data);
+  // The exact read adds the Secret's consumers; nothing references this one yet.
+  assert.deepEqual(detail.data, {
+    ...created.data,
+    consumers: {
+      agents: [],
+      configurations: [],
+      credentialSources: [],
+      provisioningRequests: [],
+      unreadable: 0,
+      truncated: false,
+    },
+  });
 
   const updated = await request(
     fixture.app,
