@@ -121,8 +121,8 @@ nobody uses. It is still a credential:
   account there cannot be disabled.
 
 Add actions such as `update` or `deploy` to the Role for more access; see
-[Authorization](../../reference/authorization.md) for actions and scope. A
-binding refuses a Role with `create` Permissions or none for its target's kind,
-because those grants could never apply. Pass the
+[Authorization](../../reference/authorization.md) for actions and scope. Role
+creation refuses `create` Permissions, and a binding refuses a Role with none
+for its target's kind, because those grants could never apply. Pass the
 Installation administrator `roleId` at creation only for someone who
 administers the whole Installation.
