@@ -48,7 +48,9 @@ test("auth:maintain requires an explicit writers-stopped claim for every change"
     () => parseAuthMaintainArguments(["activate", "--writers-stopped", "--recovery-user"]),
     /requires a value/,
   );
-  assert.throws(() => parseAuthMaintainArguments(["drop-everything"]), /Unknown command/);
+  for (const command of ["drop-everything", "constructor", "toString", "__proto__"]) {
+    assert.throws(() => parseAuthMaintainArguments([command]), /Unknown command/);
+  }
   assert.deepEqual(
     parseAuthMaintainArguments(["--", "purge-sessions", "--user", "u2", "--writers-stopped"]),
     {
@@ -88,6 +90,20 @@ function maintain(args, url = migrationUrl) {
     );
   });
 }
+
+test("auth:maintain rejects undeclared commands before configuration", async () => {
+  for (const command of ["drop-everything", "constructor", "toString", "__proto__"]) {
+    for (const args of [[command], ["--", command, "--writers-stopped"]]) {
+      // Missing database configuration must not obscure an invalid command.
+      // Launch the actual maintenance entrypoint, without a migrator credential.
+      const result = await maintain(args, "");
+      assert.equal(result.code, 64, `${args.join(" ")}: ${result.stderr}`);
+      assert.match(result.stderr, /Unknown command:/);
+      assert.match(result.stderr, /Usage: pnpm auth:maintain/);
+      assert.equal(result.output, undefined);
+    }
+  }
+});
 
 // Short-lived pools: every mutating command refuses while any other client is connected.
 async function withPool(url, work) {
