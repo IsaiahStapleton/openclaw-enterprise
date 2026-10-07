@@ -345,12 +345,21 @@ function settleCredentialWithdrawal(
     : { outcome: "permanent", code: denied.code, attempts };
 }
 
-/** The revision's admitted sources: its Harness source first, then its non-model sources. */
+/** The revision's admitted sources once each: its Harness source first, then the others. */
 function revisionCredentialSourceIds(revision: Readonly<AgentRevision>): readonly string[] {
+  const harnessSourceId = revisionHarnessSourceId(revision);
   return [
-    ...(revision.harnessAuth.method === "credential_source" ? [revision.harnessAuth.sourceId] : []),
-    ...(revision.credentialSources ?? []).map(({ sourceId }) => sourceId),
+    ...(harnessSourceId === undefined ? [] : [harnessSourceId]),
+    ...(revision.credentialSources ?? [])
+      .map(({ sourceId }) => sourceId)
+      .filter((sourceId) => sourceId !== harnessSourceId),
   ];
+}
+
+function revisionHarnessSourceId(revision: Readonly<AgentRevision>): string | undefined {
+  return revision.harnessAuth.method === "credential_source"
+    ? revision.harnessAuth.sourceId
+    : undefined;
 }
 
 interface AgentDeletionDispatchResult extends DispatchResult {
@@ -3432,6 +3441,10 @@ export class ControllerWorker {
     }
     const credentialSources: Readonly<CredentialSource>[] = [];
     for (const snapshot of revision.credentialSources ?? []) {
+      // The Harness source is listed too; it resolves above through the Harness binding.
+      if (snapshot.sourceId === revisionHarnessSourceId(revision)) {
+        continue;
+      }
       if (
         this.credentialGateway === undefined ||
         snapshot.credentialGatewayId !== this.credentialGateway.id

@@ -303,6 +303,13 @@ export const agents = occSchema.table(
     ),
     check("agents_status_valid", sql`${table.status} IN ('active', 'deleting')`),
     check(
+      "agents_harness_credential_source_listed",
+      sql`${table.harnessAuth} IS NULL
+        OR ${table.harnessAuth}->>'method' IS DISTINCT FROM 'credential_source'
+        OR COALESCE(${table.credentialSources}, '[]'::jsonb) @> jsonb_build_array(
+          jsonb_build_object('sourceId', ${table.harnessAuth}->>'sourceId'))`,
+    ),
+    check(
       "agents_deleting_is_stopped",
       sql`${table.status} <> 'deleting' OR ${table.desiredRuntimeState} = 'stopped'`,
     ),

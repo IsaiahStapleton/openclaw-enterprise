@@ -79,14 +79,18 @@ bound or deployed.
 
 ## Bind a source to an Agent
 
-Bind a model source, one whose catalog type has `harnessAuth`, as the Agent's
-Harness authentication: `{ "method": "credential_source", "sourceId": "cs_…" }`.
-Bind any other source through the Agent's `credentialSources` list, up to eight
+List every source the Agent uses in its `credentialSources`, up to eight
 entries of `{ "sourceId": "cs_…" }`, on create or update. An update replaces the
-list, and `[]` removes it. A source cannot appear in both places or twice in the
-list, and deployment rejects a model source in `credentialSources` with `409`.
+list, `[]` removes it, and a source cannot appear twice. Any catalog type can be
+listed.
 
-For either binding, the caller needs `credential_source:operate` on each exact
+To have the Harness authenticate its model with a source, also set
+`harnessAuth` to `{ "method": "credential_source", "sourceId": "cs_…" }`. It
+names one listed entry whose catalog type has `harnessAuth`; it does not bind
+the source separately. A request that names an unlisted source, or removes the
+named source from the list, fails with `404`.
+
+The caller needs `credential_source:operate` on each exact
 source, including any the update removes. Deployment also requires the Agent's
 service principal to have `operate` on each source; grant it with a
 [Namespace IAM](authorization.md#manage-namespace-policy) Role and an exact
@@ -166,8 +170,8 @@ unless the revision has maintenance (see below). Send the withdraw request
 again to queue another attempt.
 
 A withdrawn source never re-attaches to that revision. If its Sandbox is
-recreated, a withdrawn non-model source is left out and the revision keeps
-running without it. A withdrawn model source instead fails provisioning with
+recreated, a withdrawn source is left out and the revision keeps running
+without it, unless `harnessAuth` names it. A withdrawn Harness source instead fails provisioning with
 `CREDENTIAL_WITHDRAWN`, and maintenance of the revision stops preparing it. While any
 withdrawal is `pending`, each maintenance pass queues another attempt if none is
 outstanding. After model-source withdrawal, maintenance never prepares the revision

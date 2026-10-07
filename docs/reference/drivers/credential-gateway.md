@@ -48,9 +48,8 @@ A `CredentialSourceType` declares:
   are supplied as OCC Secret references.
 - `rotation`: `none`, `external`, or `gateway`.
 - `harnessAuth`: optional `{ modelProvider, loginMode }`. Only a type with this
-  entry can authenticate a Harness. The current login mode is `api_key`. A type
-  without it is a non-model source, which an Agent binds through
-  `credentialSources`.
+  entry can authenticate a Harness. The current login mode is `api_key`. An Agent
+  lists every source it uses, of any type, in `credentialSources`.
 
 ### Optional additions
 
@@ -105,17 +104,17 @@ credentialGatewayId, sourceType, loginMode }` in the revision. The source must
    be `ready`, and its type must declare `harnessAuth`. A Sandbox must be
    selected, and Compute validates the combination; see
    [Harness authentication](../harness-execution.md#harness-authentication).
-   Each non-model source is frozen as `{ sourceId, credentialGatewayId,
-sourceType }` in `credentialSources`; its type must not declare `harnessAuth`.
+   Every listed source, including the Harness source, is frozen as
+   `{ sourceId, credentialGatewayId, sourceType }` in `credentialSources`.
 3. **Dispatch.** The worker rechecks both `operate` grants, requires the
    selected gateway to match the snapshot, and loads the current source record.
    A missing, `deleting`, or mismatched source stops the revision. Compute
    revalidates the binding against the gateway's current catalog entry. The
-   worker passes the non-model sources it loaded in
-   `ComputeRevisionContext.credentialSources`, omitting any withdrawn from the
-   revision.
-4. **Provisioning.** Compute calls `attachForRevision` with the model source
-   and the non-model sources, and passes the result in
+   worker passes the other listed sources it loaded in
+   `ComputeRevisionContext.credentialSources`, omitting the Harness source and any
+   withdrawn from the revision.
+4. **Provisioning.** Compute calls `attachForRevision` with the Harness source
+   first and the other sources after it, and passes the result in
    `HarnessWorkloadRequirements.credentialAttachments` to `provisionHarness`.
    The paired Sandbox must consume every attachment and reject any it did not
    issue.
@@ -149,8 +148,8 @@ adopt or delete the same stored copy.
   refresh. Update pushes new static values; running Agents use them after a
   redeploy.
 - Compute accepts a model credential source only for dedicated Codex with a
-  source type whose `harnessAuth` is `openai`/`api_key`. Non-model sources need
-  a SandboxDriver that provisions the Harness.
+  source type whose `harnessAuth` is `openai`/`api_key`. Other listed sources
+  need a SandboxDriver that provisions the Harness.
 - Guided Agent provisioning rejects credential-source Harness authentication.
   Create the Agent, then deploy it.
 - Installed Credential Gateway packages are unsupported.

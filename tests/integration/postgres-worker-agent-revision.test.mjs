@@ -253,6 +253,11 @@ function repositoryAttempts(fixture, revision) {
   );
 }
 
+// The Agent's list starts with its Harness source; the remaining entries are tool sources.
+function toolSources(owner) {
+  return owner.credentialSources.filter(({ sourceId }) => sourceId !== owner.harnessAuth?.sourceId);
+}
+
 test(
   "worker fixture disposal preserves another database's live claim and activation",
   requiresPostgres,
@@ -3247,7 +3252,7 @@ revisionTest(
       nonModelSources: 2,
     });
     const active = await fixture.revision(owner, 1);
-    const [first, second] = owner.credentialSources.map(({ sourceId }) => sourceId);
+    const [first, second] = toolSources(owner).map(({ sourceId }) => sourceId);
     const dispatched = [];
     const withdrawn = [];
     let interruptActivation = true;
@@ -3433,7 +3438,7 @@ revisionTest(
     // request owns the claim: the offboarded operator's for one Agent, the actor's for the other.
     const expectations = [];
     for (const { owner, active, label } of owners) {
-      const [first, second] = owner.credentialSources.map(({ sourceId }) => sourceId);
+      const [first, second] = toolSources(owner).map(({ sourceId }) => sourceId);
       const order =
         label === "claim-by-offboarded"
           ? [
@@ -3526,7 +3531,7 @@ revisionTest(
       nonModelSources: 2,
     });
     const active = await fixture.revision(owner, 1);
-    const [toolSourceId, remainingToolSourceId] = owner.credentialSources.map(
+    const [toolSourceId, remainingToolSourceId] = toolSources(owner).map(
       ({ sourceId }) => sourceId,
     );
     const dispatched = [];
@@ -3694,7 +3699,7 @@ revisionTest(
       auth: "credential_source",
       nonModelSources: 1,
     });
-    const toolSourceId = owner.credentialSources[0].sourceId;
+    const toolSourceId = toolSources(owner)[0].sourceId;
     const active = await fixture.revision(owner, 1);
     // The Agent principal's exact grant is removed between admission and dispatch.
     const removed = await fixture.observerPool.query(

@@ -227,6 +227,11 @@ export function createWorkerRevisionFixtures(testFile) {
           source: { kind: "service_account", namespaceId: namespace.id, id: serviceAccountId },
         };
       }
+      // The list holds every bound source: the Harness source first, then the others.
+      const listedSources = [
+        ...(harnessAuth.method === "credential_source" ? [{ sourceId: harnessAuth.sourceId }] : []),
+        ...credentialSources,
+      ];
       const owner = await state.transact(async (unit) => {
         await unit.configurations.createConfiguration({
           id: configurationId,
@@ -242,16 +247,13 @@ export function createWorkerRevisionFixtures(testFile) {
           configurationId,
           backendId,
           harnessAuth,
-          ...(credentialSources.length === 0 ? {} : { credentialSources }),
+          ...(listedSources.length === 0 ? {} : { credentialSources: listedSources }),
           executionMode,
           servicePrincipalId: `service-agent-${id}`,
           createdAt: new Date().toISOString(),
         });
       });
-      const operatedSources = [
-        ...(harnessAuth.method === "credential_source" ? [harnessAuth.sourceId] : []),
-        ...credentialSources.map(({ sourceId }) => sourceId),
-      ];
+      const operatedSources = listedSources.map(({ sourceId }) => sourceId);
       if (operatedSources.length > 0) {
         // Deployment requires the Agent, like the deploying actor, to operate its source.
         const sourceRoleId = `role-${randomUUID()}`;

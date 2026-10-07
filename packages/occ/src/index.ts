@@ -5553,7 +5553,7 @@ export class OpenClawController {
           requestedAuth === undefined ? previousAuth : requestedAuth,
         );
       } else if (requestedAuth !== undefined) {
-        this.assertDistinctCredentialSources(agent.credentialSources ?? [], requestedAuth);
+        this.assertHarnessSourceListed(agent.credentialSources ?? [], requestedAuth);
       }
       const secretBindings = this.bindings(configuration.secretBindings);
       await this.authorizeBindings(state, principalId, namespace.id, secretBindings);
@@ -7112,17 +7112,17 @@ export class OpenClawController {
     );
   }
 
-  /** A source is either the Agent's model credential or one of its non-model sources. */
-  private assertDistinctCredentialSources(
+  /** `credentialSources` lists every source; `harnessAuth` names the one the Harness uses. */
+  private assertHarnessSourceListed(
     bindings: readonly AgentCredentialSourceBinding[],
     harnessAuth: HarnessAuthBinding | null | undefined,
   ): void {
     if (
       harnessAuth?.method === "credential_source" &&
-      bindings.some(({ sourceId }) => sourceId === harnessAuth.sourceId)
+      !bindings.some(({ sourceId }) => sourceId === harnessAuth.sourceId)
     ) {
       throw new ScopeViolationError(
-        "The Harness credential source cannot also be a non-model credential source.",
+        "The Harness credential source must be listed in the Agent's credentialSources.",
       );
     }
   }
@@ -7135,7 +7135,7 @@ export class OpenClawController {
     bindings: readonly AgentCredentialSourceBinding[],
     harnessAuth: HarnessAuthBinding | null | undefined,
   ): Promise<void> {
-    this.assertDistinctCredentialSources(bindings, harnessAuth);
+    this.assertHarnessSourceListed(bindings, harnessAuth);
     for (const { sourceId } of bindings) {
       await this.authorize(principalId, "operate", {
         kind: "credential_source",
@@ -7153,8 +7153,8 @@ export class OpenClawController {
   }
 
   /**
-   * Freezes the Agent's non-model sources. Each needs the Agent principal's `operate`, a ready
-   * record and a catalog type without Harness authentication, which binds through `harnessAuth`.
+   * Freezes every source the Agent lists, including the one `harnessAuth` names. Each needs the
+   * Agent principal's `operate` and a ready record; any catalog type may be listed.
    */
   private async admitCredentialSources(
     state: PlatformUnitOfWork,
@@ -7193,12 +7193,7 @@ export class OpenClawController {
         throw new ScopeViolationError("The credential source is unavailable.");
       }
       const gateway = this.credentialGatewayDriver(source.driverId);
-      const type = await this.credentialSourceType(gateway, source.type);
-      if (type.harnessAuth !== undefined) {
-        throw new ResourceConflictError(
-          "A model credential source binds through Harness authentication, not credentialSources.",
-        );
-      }
+      await this.credentialSourceType(gateway, source.type);
       snapshots.push({ sourceId, credentialGatewayId: gateway.id, sourceType: source.type });
     }
     return immutableCopy(snapshots);

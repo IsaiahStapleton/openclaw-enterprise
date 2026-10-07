@@ -1,4 +1,4 @@
--- Agent drafts may name up to eight non-model credential sources, in order.
+-- Agent drafts may list up to eight credential sources, in order.
 CREATE FUNCTION occ.agent_credential_sources_are_valid(sources jsonb) RETURNS boolean
 LANGUAGE plpgsql
 IMMUTABLE
@@ -69,6 +69,21 @@ $$;
 CREATE TRIGGER agent_credential_sources_are_synchronized
 AFTER INSERT OR UPDATE OF credential_sources ON occ.agents
 FOR EACH ROW EXECUTE FUNCTION occ.sync_agent_credential_sources();
+--> statement-breakpoint
+-- The list holds every source the Agent binds, so a credential-source Harness binding names a
+-- listed entry. Existing drafts gain their Harness source as the list's only entry.
+UPDATE occ.agents
+   SET credential_sources = jsonb_build_array(
+         jsonb_build_object('sourceId', harness_auth->>'sourceId'))
+ WHERE harness_auth->>'method' = 'credential_source';
+--> statement-breakpoint
+ALTER TABLE occ.agents
+  ADD CONSTRAINT agents_harness_credential_source_listed CHECK (
+    harness_auth IS NULL
+    OR harness_auth->>'method' IS DISTINCT FROM 'credential_source'
+    OR COALESCE(credential_sources, '[]'::jsonb) @> jsonb_build_array(
+         jsonb_build_object('sourceId', harness_auth->>'sourceId'))
+  );
 --> statement-breakpoint
 REVOKE ALL ON FUNCTION occ.sync_agent_credential_sources() FROM PUBLIC;
 --> statement-breakpoint

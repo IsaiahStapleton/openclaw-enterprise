@@ -126,11 +126,13 @@ requested source and, for PATCH, on the current source. The source must be
 `agents.harness_auth_credential_source_id` column references the source, so the
 database rejects deleting a source an Agent draft still uses.
 
-Non-model sources follow the same checks for each entry of `credentialSources`
+Every entry of `credentialSources` follows the same checks
 (`packages/occ/src/index.ts:authorizeAgentCredentialSources`), which also
-rejects repeating the Harness source. The list is stored in
-`agents.credential_sources`; the trigger
-`agent_credential_sources_are_synchronized` mirrors it into
+requires a credential-source `harnessAuth` to name a listed entry
+(`assertHarnessSourceListed`). The list is stored in
+`agents.credential_sources`; the constraint
+`agents_harness_credential_source_listed` enforces the same rule, and the trigger
+`agent_credential_sources_are_synchronized` mirrors the list into
 `agent_credential_sources`, whose foreign key restricts source deletion.
 
 ### 5. Admit the deployment
@@ -148,9 +150,9 @@ a dedicated Codex or native OpenClaw Harness, the paired Sandbox and gateway,
 and an `openai`/`api_key` type. Compute renders no model Secret for either
 Harness and passes the resolved source to Sandbox provisioning.
 `admitCredentialSources` then authorizes the Agent principal's `operate` on
-each non-model source, requires a catalog type without `harnessAuth`, and
-freezes `{ sourceId, credentialGatewayId, sourceType }` entries in the
-revision's `credential_sources`.
+every listed source, including the Harness source, checks each type against the
+catalog, and freezes `{ sourceId, credentialGatewayId, sourceType }` entries in
+the revision's `credential_sources`.
 
 ### 6. Resolve the source at dispatch
 
@@ -164,8 +166,9 @@ then compares the snapshot's gateway ID with its selected Driver
 missing or `deleting` source, or one whose Driver or type differs, returns
 `HARNESS_AUTH_SOURCE_UNAVAILABLE`. Otherwise it passes the snapshot plus the
 record to Compute, which rechecks the match in `harnessAuthForRevision`. It
-loads each non-model source the same way, skips one withdrawn from the revision,
-and returns `CREDENTIAL_SOURCE_UNAVAILABLE` for one that is missing or changed.
+loads each other listed source the same way, skips the Harness source and any
+source withdrawn from the revision, and returns `CREDENTIAL_SOURCE_UNAVAILABLE`
+for one that is missing or changed.
 Compute checks the list in `credentialSourcesForRevision` and attaches it after
 the model source. The next owner is the [OpenShell Sandbox provisioning flow](openshell-sandbox-provisioning.md#2-derive-the-provider-owned-harness-request).
 
@@ -217,7 +220,7 @@ value only to processes started after the update.
 `apps/controller/src/drivers/credential-gateway/openshell.ts:withdraw`
 
 The API authorizes `agent:operate` and requires the active revision to have been
-admitted with the source, as its Harness source or a non-model source. It inserts a `pending` `credential_withdrawals`
+admitted with the source in `credential_sources`. It inserts a `pending` `credential_withdrawals`
 row keyed by revision and source, or returns the existing one. Unless
 withdrawal work for the revision is already queued or claimed, it queues
 revision-scoped work with target `credentials_withdrawn`
@@ -255,8 +258,8 @@ maintenance chain. That work checks each requester's authority. Once all withdra
 are `revoked`, the pass completes without scheduling more maintenance. Deploy and
 repair work that reaches the revision fails with `CREDENTIAL_WITHDRAWN` rather
 than re-attach the source. This applies only to the Harness source; deploy and
-repair work omit a withdrawn non-model source and continue. Maintenance also
-re-queues withdrawal work for a pending non-model withdrawal
+repair work omit any other withdrawn source and continue. Maintenance also
+re-queues withdrawal work for any other pending withdrawal
 (`apps/controller/src/worker.ts:recoverPendingCredentialWithdrawals`), so an
 attempt that exhausted its retries during a gateway outage resumes after it.
 
@@ -313,6 +316,7 @@ attempt that exhausted its retries during a gateway outage resumes after it.
 
 ## Changelog
 
+- 2026-10-07 18:00: Unified binding: one `credentialSources` list holds every source, and a credential-source `harnessAuth` names a listed entry. (claude-code/session_014fi7Uq1LyofgqwLrLoQ3yY - ee950468c)
 - 2026-10-07 12:07: Unify imported and managed PAT authentication while preserving source ownership and existing OAuth behavior. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - be5006e62)
 - 2026-10-06 21:30: Keep tool-withdrawal recovery scheduled after model revocation without preparing the revision again. (pr-851-rebase - bb6c7449b)
 

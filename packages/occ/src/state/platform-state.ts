@@ -609,6 +609,19 @@ export async function assertHarnessAuthAvailable(
   }
 }
 
+/** In-memory mirror of `agents_harness_credential_source_listed`. */
+export function assertHarnessCredentialSourceListed(
+  harnessAuth: HarnessAuthBinding | null,
+  bindings: readonly AgentCredentialSourceBinding[] | undefined,
+): void {
+  if (
+    harnessAuth?.method === "credential_source" &&
+    !(bindings ?? []).some(({ sourceId }) => sourceId === harnessAuth.sourceId)
+  ) {
+    throw new ScopeViolationError("The Agent's Harness credential source must be listed.");
+  }
+}
+
 /** In-memory mirror of the `agent_credential_sources` foreign key. */
 export async function assertAgentCredentialSourcesAvailable(
   state: Pick<PlatformReadView, "credentialSources">,
@@ -2148,6 +2161,7 @@ function repositories(
         agent.namespaceId,
         agent.credentialSources,
       );
+      assertHarnessCredentialSourceListed(agent.harnessAuth, agent.credentialSources);
       const key = agentKey(agent.namespaceId, agent.id);
       if (snapshot.agents.has(key)) {
         throw new ResourceConflictError("The server generated an existing Agent identity.");
@@ -2270,6 +2284,7 @@ function repositories(
       );
       const agentCredentialSources =
         nextCredentialSources === undefined ? current.credentialSources : nextCredentialSources;
+      assertHarnessCredentialSourceListed(association, agentCredentialSources);
       const nextBackendId = backendId === undefined ? current.backendId : backendId;
       const plugins = nextPlugins === undefined ? current.plugins : normalizedPlugins(nextPlugins);
       const pluginApprovers =

@@ -799,6 +799,7 @@ test("deletion is refused while referenced, retried while the gateway fails, and
     agentId: agent.id,
     configurationId: agent.configurationId,
     harnessAuth: { method: "credential_source", sourceId: source.id },
+    credentialSources: [{ sourceId: source.id }],
   });
 
   // A bound source and its Secret cannot be removed out from under the Agent.
@@ -813,11 +814,13 @@ test("deletion is refused while referenced, retried while the gateway fails, and
       error.message ===
         `The Secret is still referenced by credential source ${source.id}. Remove those references first.`,
   );
+  // The list holds the reference, so unbinding clears both the Harness binding and the list.
   await controller.updateAgent(administrator, {
     namespaceId: namespace.id,
     agentId: agent.id,
     configurationId: agent.configurationId,
     harnessAuth: null,
+    credentialSources: [],
   });
 
   // A gateway failure keeps the record `deleting` so the caller can retry.
@@ -835,6 +838,7 @@ test("deletion is refused while referenced, retried while the gateway fails, and
       agentId: agent.id,
       configurationId: agent.configurationId,
       harnessAuth: { method: "credential_source", sourceId: source.id },
+      credentialSources: [{ sourceId: source.id }],
     }),
     ScopeViolationError,
   );
@@ -1066,6 +1070,7 @@ test("withdrawal is recorded for the active revision and queued for the worker o
     agentId: agent.id,
     configurationId: agent.configurationId,
     harnessAuth: { method: "credential_source", sourceId: source.id },
+    credentialSources: [{ sourceId: source.id }],
   });
   grantAgentSourceOperate(agent, source);
   const request = { namespaceId: namespace.id, agentId: agent.id, credentialSourceId: source.id };
@@ -1159,6 +1164,7 @@ test("deploy admission freezes the source and requires the Agent principal to op
     agentId: agent.id,
     configurationId: agent.configurationId,
     harnessAuth: { method: "credential_source", sourceId: source.id },
+    credentialSources: [{ sourceId: source.id }],
   });
   const deploy = () =>
     controller.deployAgent(
@@ -1179,7 +1185,7 @@ test("deploy admission freezes the source and requires the Agent principal to op
   });
 });
 
-test("non-model sources bind with operate, freeze at admission, and stay referenced", async () => {
+test("one credentialSources list binds every source, and harnessAuth names a listed one", async () => {
   const {
     controller,
     dedicatedAgent,
@@ -1203,7 +1209,7 @@ test("non-model sources bind with operate, freeze at admission, and stay referen
     type: "openai",
     secrets: { api_key: secret.ref },
   });
-  // A type without Harness authentication is a non-model source, such as a registry token.
+  // A type without Harness authentication, such as a registry token.
   const registry = await controller.createCredentialSource(administrator, {
     namespaceId: namespace.id,
     name: "registry",
@@ -1219,11 +1225,11 @@ test("non-model sources bind with operate, freeze at admission, and stay referen
       ...fields,
     });
 
-  // The model source binds only through harnessAuth; a list cannot repeat it or a source.
+  // harnessAuth only points into the list, so the source it names must be listed.
   await assert.rejects(
     update(administrator, {
       harnessAuth: { method: "credential_source", sourceId: model.id },
-      credentialSources: [{ sourceId: model.id }],
+      credentialSources: [{ sourceId: registry.id }],
     }),
     ScopeViolationError,
   );
@@ -1240,11 +1246,16 @@ test("non-model sources bind with operate, freeze at admission, and stay referen
   );
   const bound = await update(administrator, {
     harnessAuth: { method: "credential_source", sourceId: model.id },
-    credentialSources: [{ sourceId: registry.id }],
+    credentialSources: [{ sourceId: model.id }, { sourceId: registry.id }],
   });
-  assert.deepEqual(bound.credentialSources, [{ sourceId: registry.id }]);
+  assert.deepEqual(bound.credentialSources, [{ sourceId: model.id }, { sourceId: registry.id }]);
+  // Dropping the Harness source from the list while harnessAuth still names it is refused.
+  await assert.rejects(
+    update(administrator, { credentialSources: [{ sourceId: registry.id }] }),
+    ScopeViolationError,
+  );
 
-  // Admission rechecks each source for the Agent principal, as for the model source.
+  // Admission rechecks every listed source for the Agent principal.
   const deploy = () =>
     controller.deployAgent(
       administrator,
@@ -1255,7 +1266,9 @@ test("non-model sources bind with operate, freeze at admission, and stay referen
   await assert.rejects(deploy(), AuthorizationDeniedError);
   grantAgentSourceOperate(agent, registry, "registry");
   const revision = await deploy();
+  assert.equal(revision.harnessAuth.sourceId, model.id);
   assert.deepEqual(revision.credentialSources, [
+    { sourceId: model.id, credentialGatewayId: gateway.id, sourceType: "openai" },
     { sourceId: registry.id, credentialGatewayId: gateway.id, sourceType: "registry" },
   ]);
   await controller.transact((unit) =>
@@ -1267,7 +1280,7 @@ test("non-model sources bind with operate, freeze at admission, and stay referen
     controller.deleteCredentialSource(administrator, namespace.id, registry.id),
     ResourceConflictError,
   );
-  // A non-model source on the active revision can be withdrawn like the model source.
+  // Any listed source on the active revision can be withdrawn.
   const withdrawal = await controller.withdrawAgentCredentialSource(administrator, {
     namespaceId: namespace.id,
     agentId: agent.id,
@@ -1275,13 +1288,19 @@ test("non-model sources bind with operate, freeze at admission, and stay referen
   });
   assert.equal(withdrawal.revisionId, revision.id);
 
-  // A model type listed as a non-model source fails at admission, before any revision.
-  await update(administrator, { credentialSources: [{ sourceId: otherModel.id }] });
+  // A model-type source that harnessAuth does not name is an ordinary listed credential.
+  await update(administrator, {
+    credentialSources: [{ sourceId: model.id }, { sourceId: otherModel.id }],
+  });
   grantAgentSourceOperate(agent, otherModel, "other-model");
-  await assert.rejects(deploy(), ResourceConflictError);
+  const toolRevision = await deploy();
+  assert.deepEqual(
+    toolRevision.credentialSources.map(({ sourceId }) => sourceId),
+    [model.id, otherModel.id],
+  );
 
-  // An empty list removes the binding from the draft.
-  const cleared = await update(administrator, { credentialSources: [] });
+  // Clearing the list requires clearing the Harness binding that points into it.
+  const cleared = await update(administrator, { harnessAuth: null, credentialSources: [] });
   assert.equal(cleared.credentialSources, undefined);
 });
 
@@ -1390,6 +1409,7 @@ test("binding a credential source as Harness authentication requires operate on 
       agentId: agent.id,
       configurationId: agent.configurationId,
       harnessAuth: { method: "credential_source", sourceId: source.id },
+      credentialSources: [{ sourceId: source.id }],
     });
   // The administrator may update the Agent but is denied operate on this one source.
   iamState.restrictions.push({

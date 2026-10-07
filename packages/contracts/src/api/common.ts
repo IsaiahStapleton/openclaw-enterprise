@@ -323,7 +323,7 @@ export const AgentCredentialSourcesSchema = Type.Array(
     maxItems: 8,
     uniqueItems: true,
     description:
-      "Non-model credential sources the Agent's Harness may use at each source's endpoints. The selected Credential Gateway injects them at deployment; the Agent never receives their values.",
+      "Every credential source the Agent uses, at each source's endpoints. A credential-source harnessAuth names one entry. The selected Credential Gateway injects them at deployment; the Agent never receives their values.",
   },
 );
 

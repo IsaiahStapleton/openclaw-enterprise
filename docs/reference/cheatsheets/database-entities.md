@@ -53,7 +53,7 @@ Stores Agent drafts, their desired runtime state, and the active revision refere
 - `harness_auth_secret_id`
 - `harness_auth_service_account_id`
 - `harness_auth_credential_source_id`
-- `credential_sources` (non-model credential source bindings)
+- `credential_sources` (every bound credential source)
 - `active_revision_id`
 - `desired_runtime_state`
 - `status`

@@ -53,7 +53,7 @@ by those binaries. Use the exact native Codex executable, not a wrapper script.
 A stale path fails closed at the Codex startup model probe.
 
 `toolBinaries` is optional: a nonempty list of absolute paths inside the Sandbox
-image that may carry [non-model sources](../credential-sources.md#bind-a-source-to-an-agent)
+image that may carry [tool sources](../credential-sources.md#bind-a-source-to-an-agent)
 to their endpoints, such as `/usr/bin/curl`. Without it the catalog omits
 `bearer-token`.
 
@@ -73,7 +73,7 @@ Sandboxes and reads attachment status. Allow both to reach the gateway.
 | Type           | Secret fields        | Config fields                                | Rotation | Harness authentication |
 | -------------- | -------------------- | -------------------------------------------- | -------- | ---------------------- |
 | `openai`       | `api_key` (required) | None                                         | `none`   | `openai` / `api_key`   |
-| `bearer-token` | `token` (required)   | `host`, `env_var` (required); `port`, `path` | `none`   | None (non-model)       |
+| `bearer-token` | `token` (required)   | `host`, `env_var` (required); `port`, `path` | `none`   | None (tool credential) |
 
 `bearer-token` config is checked before any gateway call:
 

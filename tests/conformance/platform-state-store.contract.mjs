@@ -1827,6 +1827,8 @@ async function verifyCredentialSourceContract(
     configurationId: sourceConfiguration.id,
     backendId: null,
     harnessAuth: sourceBinding,
+    // The list holds every bound source; harnessAuth names the listed Harness source.
+    credentialSources: [{ sourceId: source.id }],
     executionMode: "embedded",
     servicePrincipalId: identifier("service-agent"),
     desiredRuntimeState: "stopped",
@@ -1847,6 +1849,9 @@ async function verifyCredentialSourceContract(
       sourceType: source.type,
       loginMode: "api_key",
     },
+    credentialSources: [
+      { sourceId: source.id, credentialGatewayId: "openshell-contract", sourceType: source.type },
+    ],
   };
   const sourceReferences = (transaction) =>
     transaction.credentialSources.hasReferences(sourceNamespace.id, source.id);
@@ -2005,6 +2010,12 @@ async function verifyCredentialSourceContract(
       sourceConfiguration.id,
       undefined,
       null,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      [],
     );
     // An inactive historical snapshot does not retain the source.
     assert.equal(await sourceReferences(transaction), false);

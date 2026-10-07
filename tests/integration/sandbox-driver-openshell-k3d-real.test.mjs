@@ -1054,7 +1054,7 @@ function portableRuntimeCommand(command) {
 function bridgeRequirements(context, claimName, subPath) {
   // The model key reaches Codex only through the Credential Gateway: Compute renders no model
   // Secret. The Sandbox receives the model source's attachment first, then one for each
-  // non-model source the revision still holds; a withdrawn one is never re-attached.
+  // other source the revision still holds; a withdrawn one is never re-attached.
   assert.equal(
     context.requirements.environment.some(({ name }) => name === "OPENAI_API_KEY"),
     false,
@@ -1062,11 +1062,13 @@ function bridgeRequirements(context, claimName, subPath) {
   );
   const attached = context.requirements.credentialAttachments.map(({ sourceId }) => sourceId);
   assert.equal(attached[0], context.revision.harnessAuth.sourceId);
-  const admitted = (context.revision.credentialSources ?? []).map(({ sourceId }) => sourceId);
+  const admitted = (context.revision.credentialSources ?? [])
+    .map(({ sourceId }) => sourceId)
+    .filter((sourceId) => sourceId !== context.revision.harnessAuth.sourceId);
   assert.deepEqual(
     attached.slice(1),
     admitted.filter((sourceId) => attached.includes(sourceId)),
-    "non-model attachments must follow the model source in admission order",
+    "other attachments must follow the model source in admission order",
   );
   const workloadIdentity = context.requirements.workloadIdentity;
   assert.ok(workloadIdentity, "the native compatibility bridge requires projected identity.");
@@ -2044,17 +2046,27 @@ async function prepareProductionInstallation(
     controllerAuthBaseURL,
   );
   const events = [];
-  workerPool = new pg.Pool({ connectionString: databaseUrl, max: 6 });
-  worker = createControllerWorker({
-    mode: "production",
-    pool: workerPool,
-    drivers: diagnosticWorkerDrivers,
-    pollIntervalMs: 50,
-    leaseDurationMs: 60_000,
-    maxAttempts: 40,
-    emit: (event) => events.push(event),
-  });
-  await worker.start();
+  const startWorker = async () => {
+    workerPool = new pg.Pool({ connectionString: databaseUrl, max: 6 });
+    worker = createControllerWorker({
+      mode: "production",
+      pool: workerPool,
+      drivers: diagnosticWorkerDrivers,
+      pollIntervalMs: 50,
+      leaseDurationMs: 60_000,
+      maxAttempts: 40,
+      emit: (event) => events.push(event),
+    });
+    await worker.start();
+  };
+  // Stopping the real worker lets a phase stage durable state before any claim reads it.
+  // Stop closes the worker's pool, so a restart uses a fresh one.
+  const pauseWorker = async () => {
+    await worker.stop();
+    worker = undefined;
+    workerPool = undefined;
+  };
+  await startWorker();
 
   const createdNamespace = await request("POST", "/namespaces", {
     name: `openshell-${randomUUID()}`,
@@ -2123,8 +2135,14 @@ async function prepareProductionInstallation(
   );
   assert.equal(observedSource.status, 200, JSON.stringify(observedSource.error));
   assert.deepEqual(observedSource.data.status, { state: "ready" });
-  const toolSource =
-    tokenEcho === undefined ? undefined : await registerToolSource(request, namespaceId, tokenEcho);
+  // Two tool sources reach the same echo service on separate paths with separate variables.
+  const toolSources =
+    tokenEcho === undefined
+      ? undefined
+      : [
+          await registerToolSource(request, namespaceId, tokenEcho, "TOOL_A_TOKEN", "/echo-a"),
+          await registerToolSource(request, namespaceId, tokenEcho, "TOOL_B_TOKEN", "/echo-b"),
+        ];
 
   const agentConfiguration = await request("POST", `/namespaces/${namespaceId}/configurations`, {
     kind: "agent",
@@ -2144,7 +2162,11 @@ async function prepareProductionInstallation(
     configurationId: agentConfiguration.data.id,
     executionMode: "dedicated",
     harnessAuth: { method: "credential_source", sourceId: modelSource.data.id },
-    ...(toolSource === undefined ? {} : { credentialSources: [{ sourceId: toolSource.id }] }),
+    // The list holds every bound source; harnessAuth names the model source within it.
+    credentialSources: [
+      { sourceId: modelSource.data.id },
+      ...(toolSources ?? []).map(({ id }) => ({ sourceId: id })),
+    ],
   });
   assert.equal(agent.status, 201, JSON.stringify(agent.error));
 
@@ -2174,7 +2196,7 @@ async function prepareProductionInstallation(
     resourceId: modelSource.data.id,
   });
   assert.equal(sourceBinding.status, 201, JSON.stringify(sourceBinding.error));
-  if (toolSource !== undefined) {
+  for (const toolSource of toolSources ?? []) {
     const toolBinding = await request("POST", `/namespaces/${namespaceId}/iam/access-bindings`, {
       subjectKind: "identity",
       subjectId: agent.data.servicePrincipalId,
@@ -2312,7 +2334,10 @@ async function prepareProductionInstallation(
     appServerToken: transport.appServerToken,
     controllerUrl,
     credentials: adminCredentials,
-    ...(toolSource === undefined ? {} : { toolSource }),
+    ...(toolSources === undefined ? {} : { toolSources }),
+    observerPool,
+    pauseWorker,
+    resumeWorker: startWorker,
     diagnoseRevision: (revisionId) =>
       writeWorkerCompletionDiagnostics({
         pool: observerPool,
@@ -2383,10 +2408,9 @@ async function startTokenEcho(context) {
   return { host: `token-echo.${namespace}.svc.cluster.local`, port: 8080 };
 }
 
-/** Registers a static bearer token for the echo service as a non-model credential source. */
-async function registerToolSource(request, namespaceId, tokenEcho) {
+/** Registers a static bearer token for one echo-service path as a tool credential source. */
+async function registerToolSource(request, namespaceId, tokenEcho, environmentName, path) {
   const token = `oce-tool-${randomUUID()}`;
-  const environmentName = "TOOL_API_TOKEN";
   const secret = await request("POST", `/namespaces/${namespaceId}/secrets`, {
     name: `openshell-tool-token-${randomUUID()}`,
     value: token,
@@ -2395,10 +2419,10 @@ async function registerToolSource(request, namespaceId, tokenEcho) {
   const config = {
     host: tokenEcho.host,
     port: String(tokenEcho.port),
-    path: "/echo",
+    path,
     env_var: environmentName,
   };
-  // A non-model source may not take over the model placeholder's variable.
+  // A tool source may not take over the model placeholder's variable.
   const reserved = await request("POST", `/namespaces/${namespaceId}/credential-sources`, {
     name: `openshell-tool-reserved-${randomUUID()}`,
     type: "bearer-token",
@@ -2418,24 +2442,29 @@ async function registerToolSource(request, namespaceId, tokenEcho) {
     id: source.data.id,
     token,
     environmentName,
-    url: `http://${tokenEcho.host}:${tokenEcho.port}/echo`,
+    url: `http://${tokenEcho.host}:${tokenEcho.port}${path}`,
+    digest: createHash("sha256").update(`Bearer ${token}`).digest("hex"),
   };
 }
 
 /**
- * The running Codex Harness calls the echo service with its non-model placeholder. OpenShell
- * substitutes the token at the source's endpoint only; after withdrawal it no longer does,
- * and the model source keeps working, so other Agent credentials are unaffected.
+ * The running Codex Harness calls the echo service with each tool placeholder. OpenShell
+ * substitutes a token only at its own source's endpoint. The phase then proves, through the
+ * real worker, Compute and OpenShell gateway, that:
+ * - a withdrawal is executed only on its own requester's authority, even on a shared claim;
+ * - an Agent that loses a source grant after admission never has the revision provisioned;
+ * - admission refuses a redeploy without the grant.
+ * The model source keeps working throughout.
  */
 async function assertNonModelCredentialSource(topology) {
-  const { request, namespaceId, toolSource } = topology;
+  const { request, namespaceId, toolSources, observerPool } = topology;
+  const [toolA, toolB] = toolSources;
   const agentId = topology.agent.id;
   const current = await request("GET", `/namespaces/${namespaceId}/agents/${agentId}`);
   assert.equal(current.status, 200, JSON.stringify(current.error));
   const revision = { id: current.data.activeRevisionId, agentId };
   assert.ok(revision.id, "the Agent must have an active revision");
   const harnessPod = await waitForProviderHarnessPod(topology.placement, revision);
-  const expected = createHash("sha256").update(`Bearer ${toolSource.token}`).digest("hex");
   const call = async () => {
     const nonce = `OCC-OPENSHELL-TOOL-${randomUUID()}`;
     const result = await requestCodexTurnFromOpenShellHarnessPod({
@@ -2449,67 +2478,163 @@ async function assertNonModelCredentialSource(topology) {
         // OpenShell refuses model requests whose body carries a placeholder, including the
         // literal placeholder prefix in command text. The command prints only the first nine
         // characters, which identify a placeholder without reproducing it.
-        `(1) printf '%s\\n' "$${toolSource.environmentName}" | cut -c1-9; ` +
-        `(2) curl -sS --max-time 20 -H "Authorization: Bearer $${toolSource.environmentName}" ` +
-        `${toolSource.url}. Then reply with exactly ${nonce}.`,
+        `(1) printf '%s\\n' "$${toolA.environmentName}" | cut -c1-9; ` +
+        `(2) curl -sS --max-time 20 -H "Authorization: Bearer $${toolA.environmentName}" ` +
+        `${toolA.url}; ` +
+        `(3) curl -sS --max-time 20 -H "Authorization: Bearer $${toolB.environmentName}" ` +
+        `${toolB.url}. Then reply with exactly ${nonce}.`,
     });
-    assert.equal(JSON.stringify(result).includes(toolSource.token), false);
+    for (const { token } of toolSources) {
+      assert.equal(JSON.stringify(result).includes(token), false);
+    }
     assert.match(result.assistant, new RegExp(nonce), "the model source must keep working");
     const commands = result.items
       .filter(({ method }) => method === "item/completed")
       .map(({ params }) => params?.item)
       .filter((item) => item?.type === "commandExecution");
     const environment = commands.find(({ command }) => String(command).includes("cut -c1-9"));
-    const echo = commands.find(({ command }) => String(command).includes(toolSource.url));
-    assert.ok(environment, "the Harness must read its non-model placeholder");
-    assert.ok(echo, "the Harness must call the protected endpoint");
-    let response;
-    try {
-      response = JSON.parse(String(echo.aggregatedOutput ?? "").trim());
-    } catch {
-      response = undefined;
-    }
-    return { placeholder: String(environment.aggregatedOutput ?? "").trim(), response };
+    assert.ok(environment, "the Harness must read its tool placeholder");
+    const digest = (tool) => {
+      const echo = commands.find(({ command }) => String(command).includes(tool.url));
+      assert.ok(echo, `the Harness must call ${tool.url}`);
+      try {
+        return JSON.parse(String(echo.aggregatedOutput ?? "").trim()).digest;
+      } catch {
+        return undefined;
+      }
+    };
+    return {
+      placeholder: String(environment.aggregatedOutput ?? "").trim(),
+      a: digest(toolA),
+      b: digest(toolB),
+    };
+  };
+  const withdrawalPath = (tool) =>
+    `/namespaces/${namespaceId}/agents/${agentId}/credential-sources/${tool.id}`;
+  const readWithdrawal = async (tool) => {
+    const observed = await request("GET", `${withdrawalPath(tool)}/withdrawal`);
+    assert.equal(observed.status, 200, JSON.stringify(observed.error));
+    return observed.data;
   };
 
-  // The Harness holds only a placeholder; the echo service receives the real token.
+  // The Harness holds only placeholders; each endpoint receives its own real token.
   const before = await call();
   // A real token starts with oce-tool-; only a placeholder starts with the OpenShell prefix.
   assert.equal(before.placeholder, "openshell");
-  assert.equal(before.response?.digest, expected, "OpenShell must substitute the bound token");
+  assert.equal(before.a, toolA.digest, "OpenShell must substitute tool A's token");
+  assert.equal(before.b, toolB.digest, "OpenShell must substitute tool B's token");
 
-  const withdrawalPath = `/namespaces/${namespaceId}/agents/${agentId}/credential-sources/${toolSource.id}`;
-  const requested = await request("POST", `${withdrawalPath}/withdraw`);
+  // Two requesters withdraw different sources from the running revision, sharing one worker
+  // claim. The second, operator B, held the actor's grants when the withdrawal was recorded
+  // and is offboarded before the worker runs it. The real worker must detach only the source
+  // whose requester still operates the Agent. B's withdrawal is recorded in the application
+  // database directly because this test has no second API login; the authorization decision
+  // and the gateway detach under test are the production worker's.
+  await topology.pauseWorker();
+  const requested = await request("POST", `${withdrawalPath(toolA)}/withdraw`);
   assert.equal(requested.status, 202, JSON.stringify(requested.error));
-  await waitFor(
-    "the worker to confirm the non-model source's revocation",
+  const actorId = requested.data.requestedBy;
+  const offboarded = `withdraw-offboarded-${randomUUID()}`;
+  await observerPool.query(
+    `INSERT INTO occ.iam_identities (id, kind, issuer, subject)
+     SELECT $1, kind, issuer, $1 FROM occ.iam_identities WHERE id = $2`,
+    [offboarded, actorId],
+  );
+  await observerPool.query(
+    `INSERT INTO occ.iam_access_bindings
+       (id, namespace_id, identity_subject_id, role_id, resource_kind, resource_id)
+     SELECT 'binding-' || gen_random_uuid(), namespace_id, $1, role_id, resource_kind, resource_id
+     FROM occ.iam_access_bindings WHERE identity_subject_id = $2`,
+    [offboarded, actorId],
+  );
+  await observerPool.query(
+    `INSERT INTO occ.credential_withdrawals
+       (namespace_id, agent_id, revision_id, credential_source_id, state, requested_by, requested_at)
+     VALUES ($1, $2, $3, $4, 'pending', $5, now())`,
+    [namespaceId, agentId, revision.id, toolB.id, offboarded],
+  );
+  // Operator B is offboarded after requesting and before any worker reads the withdrawal.
+  const offboarding = await observerPool.query(
+    "DELETE FROM occ.iam_access_bindings WHERE identity_subject_id = $1",
+    [offboarded],
+  );
+  assert.ok(offboarding.rowCount > 0, "operator B must have held grants to lose");
+  await topology.resumeWorker();
+  const revokedA = await waitFor(
+    "tool A's withdrawal to be revoked on its requester's authority",
     async () => {
-      const observed = await request("GET", `${withdrawalPath}/withdrawal`);
-      assert.equal(observed.status, 200, JSON.stringify(observed.error));
-      return observed.data.state === "revoked" ? observed.data : undefined;
+      const found = await readWithdrawal(toolA);
+      return found.state === "revoked" ? found : undefined;
     },
     180_000,
   );
+  assert.ok(revokedA.completedAt);
+  const deniedB = await waitFor(
+    "the offboarded requester's withdrawal to be denied",
+    async () => {
+      const found = await readWithdrawal(toolB);
+      return found.lastReason === "AUTHORIZATION_DENIED" ? found : undefined;
+    },
+    180_000,
+  );
+  assert.equal(deniedB.state, "pending");
+  assert.equal(deniedB.requestedBy, offboarded);
 
-  // The same running Harness can no longer deliver the token, yet its model turns succeed.
+  // In the same running Harness, the gateway no longer delivers tool A's token, still
+  // delivers tool B's, and model turns succeed.
   const after = await call();
-  assert.notEqual(after.response?.digest, expected, "a withdrawn token must not be delivered");
+  assert.notEqual(after.a, toolA.digest, "a withdrawn token must not be delivered");
+  assert.equal(after.b, toolB.digest, "a denied withdrawal must not detach its source");
   const unchanged = await request("GET", `/namespaces/${namespaceId}/agents/${agentId}`);
   assert.equal(unchanged.data.activeRevisionId, revision.id, "withdrawal must not redeploy");
 
-  // Without the Agent principal's grant on the source, admission refuses a redeploy, so no
-  // new revision is created and the gateway attaches nothing.
+  // Admission accepts a redeploy, then the Agent principal loses its grant on tool B before
+  // the worker dispatches it. The worker must refuse before Compute provisions anything, so
+  // the gateway never attaches the source to the new revision.
   const revisionCount = async () => {
     const listed = await request("GET", `/namespaces/${namespaceId}/agents/${agentId}/revisions`);
     assert.equal(listed.status, 200, JSON.stringify(listed.error));
     return listed.data.length;
   };
-  const revisionsBefore = await revisionCount();
+  await topology.pauseWorker();
+  const redeployed = await request("POST", `/namespaces/${namespaceId}/agents/${agentId}/deploy`);
+  assert.equal(redeployed.status, 202, JSON.stringify(redeployed.error));
   const ungranted = await request(
     "DELETE",
-    `/namespaces/${namespaceId}/iam/access-bindings/${toolSource.bindingId}`,
+    `/namespaces/${namespaceId}/iam/access-bindings/${toolB.bindingId}`,
   );
   assert.equal(ungranted.status, 204, JSON.stringify(ungranted.error));
+  await topology.resumeWorker();
+  const failed = await waitFor(
+    `deployment ${redeployed.data.id} to fail its dispatch authorization`,
+    async () => {
+      const status = await request(
+        "GET",
+        `/namespaces/${namespaceId}/agents/${agentId}/deployments/${redeployed.data.id}`,
+      );
+      assert.equal(status.status, 200, JSON.stringify(status.error));
+      return status.data.status === "failed" ? status.data : undefined;
+    },
+    180_000,
+  );
+  const reason = await observerPool.query(
+    "SELECT reason_code FROM occ.controller_work WHERE idempotency_key = $1",
+    [`agent_revision:${redeployed.data.id}:reconcile`],
+  );
+  assert.equal(reason.rows[0]?.reason_code, "AUTHORIZATION_DENIED", JSON.stringify(failed.error));
+  const sandboxes = await resources("sandboxes.agents.x-k8s.io", topology.placement);
+  assert.equal(
+    sandboxes.some(
+      (sandbox) => sandbox.metadata.labels?.["openclaw.dev/revision"] === redeployed.data.id,
+    ),
+    false,
+    "a refused dispatch must not provision a Sandbox for the new revision",
+  );
+  const kept = await request("GET", `/namespaces/${namespaceId}/agents/${agentId}`);
+  assert.equal(kept.data.activeRevisionId, revision.id);
+
+  // Without the grant, admission refuses a further redeploy and admits no revision.
+  const revisionsBefore = await revisionCount();
   const refused = await request("POST", `/namespaces/${namespaceId}/agents/${agentId}/deploy`);
   assert.equal(refused.status, 403, JSON.stringify(refused.error ?? refused.data));
   assert.equal(
@@ -2517,8 +2642,6 @@ async function assertNonModelCredentialSource(topology) {
     revisionsBefore,
     "a refused deployment must not admit a revision",
   );
-  const kept = await request("GET", `/namespaces/${namespaceId}/agents/${agentId}`);
-  assert.equal(kept.data.activeRevisionId, revision.id);
 }
 
 /**
