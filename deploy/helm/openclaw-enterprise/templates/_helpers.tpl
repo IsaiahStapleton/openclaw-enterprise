@@ -123,13 +123,42 @@ an allowlist without its provider is refused: the API treats it as a startup err
 {{- if or $proxy.cidrs $proxy.clientAddressHeader -}}{{- fail "api.trustedProxy.cidrs and clientAddressHeader require api.trustedProxy.preset" -}}{{- end -}}
 {{- else -}}
 {{- if or (not (kindIs "slice" $proxy.cidrs)) (not $proxy.cidrs) -}}{{- fail (printf "api.trustedProxy.preset %s requires api.trustedProxy.cidrs: the proxy addresses the API Pod sees as the connecting peer" $preset) -}}{{- end -}}
+{{- /* The API parses these with Node isIP and refuses a zero prefix. ::ffff:d.d.d.d is rewritten to IPv4, so that form uses a prefix of 1 through 32. */ -}}
 {{- range $cidr := $proxy.cidrs -}}
 {{- $value := toString $cidr -}}
 {{- if regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([1-9]|[12][0-9]|3[0-2])$" $value -}}
 {{- range $octet := splitList "." (first (splitList "/" $value)) -}}
-{{- if gt (int $octet) 255 -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv4 address" -}}{{- end -}}
+{{- if or (gt (int $octet) 255) (and (gt (len $octet) 1) (hasPrefix "0" $octet)) -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv4 address" -}}{{- end -}}
 {{- end -}}
-{{- else if not (regexMatch "^[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*/([1-9]|[1-9][0-9]|1[01][0-9]|12[0-8])$" $value) -}}
+{{- else if regexMatch "^[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*/([1-9]|[1-9][0-9]|1[01][0-9]|12[0-8])$" $value -}}
+{{- $addr := first (splitList "/" $value) -}}
+{{- $prefix := int (last (splitList "/" $value)) -}}
+{{- $pieces := splitList "::" $addr -}}
+{{- if gt (len $pieces) 2 -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv6 address" -}}{{- end -}}
+{{- $bag := dict "tokens" (list) -}}
+{{- range $piece := $pieces -}}
+{{- if $piece -}}
+{{- $_ := set $bag "tokens" (concat (index $bag "tokens") (splitList ":" $piece)) -}}
+{{- end -}}
+{{- end -}}
+{{- $tokens := index $bag "tokens" -}}
+{{- $count := len $tokens -}}
+{{- range $index, $token := $tokens -}}
+{{- if not $token -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv6 address" -}}{{- end -}}
+{{- if contains "." $token -}}
+{{- if or (ne (add $index 1) $count) (not (regexMatch "^(?:0|[1-9][0-9]{0,2})(?:\\.(?:0|[1-9][0-9]{0,2})){3}$" $token)) -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv6 address" -}}{{- end -}}
+{{- range $octet := splitList "." $token -}}
+{{- if gt (int $octet) 255 -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv6 address" -}}{{- end -}}
+{{- end -}}
+{{- else if not (regexMatch "^[0-9A-Fa-f]{1,4}$" $token) -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv6 address" -}}{{- end -}}
+{{- end -}}
+{{- $slots := $count -}}
+{{- if and (gt $count 0) (contains "." (last $tokens)) -}}{{- $slots = add $count 1 -}}{{- end -}}
+{{- if gt (len $pieces) 1 -}}
+{{- if ge $slots 8 -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv6 address" -}}{{- end -}}
+{{- else if ne $slots 8 -}}{{- fail "api.trustedProxy.cidrs contains an invalid IPv6 address" -}}{{- end -}}
+{{- if and (regexMatch "^(?i)::ffff:(?:0|[1-9][0-9]{0,2})(?:\\.(?:0|[1-9][0-9]{0,2})){3}$" $addr) (gt $prefix 32) -}}{{- fail "api.trustedProxy.cidrs contains an IPv4-mapped address, whose prefix must be 1 through 32" -}}{{- end -}}
+{{- else -}}
 {{- fail "api.trustedProxy.cidrs requires IPv4 or IPv6 CIDRs with a nonzero prefix" -}}
 {{- end -}}
 {{- end -}}
