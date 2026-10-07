@@ -95,11 +95,14 @@ occ service-key create --service-principal '<service-principal-id>' \
 
 `binding.json` names the service principal as `subjectId` and an existing
 Namespace Role; see [Namespace IAM](../reference/authorization.md#manage-namespace-policy).
+Each binding grants one target, so bind the same targets a person would need, as in
+[Let a person run an existing Agent](topics/iam.md#let-a-person-run-an-existing-agent).
 Issuing the key requires that you already hold every grant of the service
 principal. The key never reaches another Namespace, IAM policy, or key issuance. Hand over the `0600` key file privately; the member
 sets `OCC_SERVICE_KEY_FILE` to it and `OCC_NAMESPACE` to the Namespace. When the
 key is no longer needed, run `occ service-key revoke <key-id>` (the ID printed
-at creation) or delete its AccessBindings.
+at creation) or delete its AccessBindings. Disabling the member's console
+account does not end the key, so do this when they leave.
 
 ## Choose your next task
 
