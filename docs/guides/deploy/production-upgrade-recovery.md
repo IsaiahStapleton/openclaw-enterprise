@@ -143,6 +143,38 @@ the preflight), Helm's `--wait` has marked the candidate release `failed`:
 rename as above, follow the Helm failure steps above, then repeat the command
 with `--resume --migration-history-checked`.
 
+## Correct values newer releases refuse
+
+Releases after 2026-10-05 refuse some values that earlier releases accepted.
+Before the maintenance window, render the candidate chart with your live values
+from the candidate checkout:
+
+```bash
+helm template oce deploy/helm/openclaw-enterprise -f /secure/occ/values.yaml > /dev/null
+```
+
+The upgrade command also renders the chart and runs its
+[startup preflight](production-upgrade.md#upgrade-the-control-plane) before it
+stops OCC, so it stops on these values while the old release keeps serving. A
+plain `helm upgrade` stops at the same chart refusals, but the API and worker
+fail at startup on the Installation values below.
+
+The upgrade command does not accept these changes in candidate files. Apply
+each correction to the running release with its current chart, as in
+[Apply other Installation changes](production-upgrade.md#apply-other-installation-changes),
+so the baseline files match live state. The first five corrections keep the
+behavior the old release already had.
+
+| Refused value                                                                                                                     | Correction                                                                                                                                                                                                      |
+| --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auth.github.allowedOrgs`, `allowedTeams` or `auth.google.allowedDomains` set while that provider is disabled                     | Remove the list; the old chart ignored it.                                                                                                                                                                      |
+| An empty list written as `""` or `{}` (those allowlists, or a provider's `egressCidrs`)                                           | Write `[]` or remove the key.                                                                                                                                                                                   |
+| An IPv4-mapped `api.trustedProxy.cidrs` entry with a prefix from 97 to 128, such as `::ffff:a00:0/104`                            | Write the IPv4 CIDR with the prefix minus 96: `10.0.0.0/8`. A Compose install's API refuses the same entry in `OCC_AUTH_TRUSTED_PROXY_CIDRS` at startup.                                                        |
+| A Unicode `auth.baseUrl` host, such as `https://bücher.example.com`, with a punycode `agentNativeAdmin.sharedCookieDomain`        | Write the host in punycode: `https://xn--bcher-kva.example.com`.                                                                                                                                                |
+| An `auth.baseUrl` with a `/.` or `/%2e` path, a short loopback such as `http://127.1`, or U+200B (zero-width space)               | Remove the path and invisible characters; write `127.0.0.1`.                                                                                                                                                    |
+| A `presets.files` Preset `name` with leading or trailing Unicode spaces (such as U+00A0), U+2028, U+2029 or C1 control characters | Correct the `name` in the file, or remove the entry. The saved copy keeps its old name, and startup adds the corrected one.                                                                                     |
+| A Backend `id` with a C1 control character (U+0080 to U+009F)                                                                     | Rename the Backend. No Agent can store such an ID, but ServiceAccounts created through that Backend keep it in a binding that cannot change: delete them before the rename and recreate them after the upgrade. |
+
 ## Roll back across human sign-in
 
 Migration `0037` adds the human sign-in state. `helm rollback` skips the
