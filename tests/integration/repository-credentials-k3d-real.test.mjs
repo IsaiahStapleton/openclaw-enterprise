@@ -140,6 +140,12 @@ test(
 
 function installedRepositoryJourney(mode, profile = "git-full") {
   return async (context) => {
+    // TODO: restore direct installed qualification after safe remote cleanup is qualified.
+    if (selected) {
+      throw new Error(
+        "Installed repository qualification is temporarily unavailable until safe remote cleanup is supported.",
+      );
+    }
     const dedicated = mode === "dedicated";
     const readOnly = profile === "git-read";
     if (dedicated) {

@@ -325,5 +325,9 @@ export async function prepareHybridInstallation(f) {
     return value.status === "ready" && value;
   });
   f.presets = await f.api("GET", `/namespaces/${f.namespace.id}/presets`);
-  assert.deepEqual(f.presets.map((p) => p.name).sort(), ["Standard Codex", "Standard OpenClaw"]);
+  assert.deepEqual(f.presets.map((p) => p.name).sort(), [
+    "Standard Codex",
+    "Standard OpenClaw",
+    "default-codex",
+  ]);
 }

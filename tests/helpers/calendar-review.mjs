@@ -9,9 +9,6 @@ export async function verifyCalendarReviewPolicy(fixture, agent, credential) {
     process.env.OCC_TEST_CODEX_CALENDAR_PLUGIN_ID?.trim() ||
     "codex-plugin:google-calendar@openai-curated-remote";
   const turnMarker = `CODEX_CALENDAR_PLUGIN_REAL_READ_${randomUUID()}`;
-  const prompt =
-    process.env.OCC_TEST_CODEX_CALENDAR_PROMPT?.trim() ||
-    `Use the Google Calendar list_calendars tool with max_results 1 to read the calendars visible to this test account, then answer with the exact marker ${turnMarker}.`;
   const configuredExpectedPatterns = (process.env.OCC_TEST_CODEX_CALENDAR_EXPECT ?? "")
     .split("\n")
     .map((entry) => entry.trim())
@@ -24,6 +21,9 @@ export async function verifyCalendarReviewPolicy(fixture, agent, credential) {
     assert.fail(
       "OCC_TEST_CODEX_CALENDAR_TOOL_NAME must be the exact harmless Google Calendar tool name used by the live fixture.",
     );
+  const prompt =
+    process.env.OCC_TEST_CODEX_CALENDAR_PROMPT?.trim() ||
+    `Use the Google Calendar ${toolName} tool exactly once for the configured harmless read, then answer with the exact marker ${turnMarker}.`;
   const resultPattern =
     process.env.OCC_TEST_CODEX_CALENDAR_RESULT_EXPECT?.trim() ||
     assert.fail(
@@ -43,6 +43,11 @@ export async function verifyCalendarReviewPolicy(fixture, agent, credential) {
   assert.ok(Object.hasOwn(deployed.revision.plugins?.plugins ?? {}, pluginId));
   assert.equal(Object.hasOwn(deployed.revision.plugins, "artifacts"), false);
   assert.deepEqual(deployed.revision.harnessAuth, agent.harnessAuth);
+  assert.deepEqual(
+    deployed.status.warnings,
+    [],
+    "Calendar must install with connected account authentication before approval policy can be proved.",
+  );
 
   const calendarSessionKey = `agent:main:codex-calendar-${randomUUID()}`;
   const content = await fixture.normalGatewayTurn({

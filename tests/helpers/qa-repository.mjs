@@ -8,7 +8,7 @@ import {
   readInstalledCredentialSession,
 } from "./repository-credentials-installed.mjs";
 import { loadYaml, dumpYaml, waitFor } from "./qa-utils.mjs";
-import { protectedText } from "./qa-secrets.mjs";
+import { protectedText, registerQaSecret } from "./qa-secrets.mjs";
 
 export async function prepareQaRepository(f) {
   const input = f.repositoryInput;
@@ -303,13 +303,26 @@ export async function verifyQaRepository(f, agent, profile = "git-full") {
     observerToken || process.env.OCC_TEST_QA_GITHUB_OBSERVER_BINARY,
     "select an independent observer credential or managed gh wrapper",
   );
+  // A selected managed wrapper may authenticate from its caller's environment.
+  // Forward credentials only to the host observer/Git calls, never the launcher
+  // environment used for containers, Kubernetes, or model turns.
+  const observerEnvironment = observerToken
+    ? { GH_TOKEN: observerToken }
+    : Object.fromEntries(
+        ["GH_TOKEN", "GITHUB_TOKEN"]
+          .filter((name) => process.env[name])
+          .map((name) => [name, process.env[name]]),
+      );
+  for (const value of Object.values(observerEnvironment)) {
+    registerQaSecret(value);
+  }
   const observe = createRepositoryObserver({
     repository,
     binary: process.env.OCC_TEST_QA_GITHUB_OBSERVER_BINARY ?? "gh",
     run: (cmd, args, options) =>
       f.run(cmd, args, {
         ...options,
-        env: { ...f.env, ...options?.env, ...(observerToken ? { GH_TOKEN: observerToken } : {}) },
+        env: { ...f.env, ...options?.env, ...observerEnvironment },
       }),
   });
   const { data: remote } = await observe("GET");
