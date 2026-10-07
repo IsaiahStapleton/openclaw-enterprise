@@ -1116,7 +1116,18 @@ async function createApiSecret(request, namespaceId, name, value) {
     200,
     `Secret read failed with HTTP ${read.status} (${read.error?.code ?? "unknown"})`,
   );
-  assert.deepEqual(read.data, response.data);
+  // Detail reads include consumers; a newly created, unbound Secret has none.
+  assert.deepEqual(read.data, {
+    ...response.data,
+    consumers: {
+      agents: [],
+      configurations: [],
+      credentialSources: [],
+      provisioningRequests: [],
+      unreadable: 0,
+      truncated: false,
+    },
+  });
   return response.data;
 }
 
