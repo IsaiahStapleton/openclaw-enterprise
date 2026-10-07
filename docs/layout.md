@@ -53,6 +53,11 @@ owning Driver or Backend and wire it through composition. See
 [platform architecture](design.md) for component interactions, implementation
 status, and remaining design requirements.
 
+HTTP error details live in `apps/controller/src/http/error-details.ts`.
+It translates schema failures into detail paths and expected values. `http/errors.ts`
+owns platform-error mapping, response formatting, and removal of request values
+from verbose validation errors after their details are built.
+
 The [repository capability](reference/repository-credentials.md#repo-driver-contract)
 uses `RepoDriver` in `packages/contracts/src/repo.ts` and the bundled
 `drivers/repo/github/driver.ts` adapter. Under `apps/controller/src/`, its owners are:
