@@ -104,42 +104,29 @@ defect, not merely restate mocks.
 Use the [developer skills](docs/testing/developer-skills.md) for test quality,
 proof selection, diff cleanup, and requested independent review.
 
-By default, open new PRs from an authorized topic branch in
-`openclaw/openclaw-enterprise` against `main`. Agents must not create or select
-a fork unless the user explicitly requests it; report missing upstream push
-access instead. Maintainers retain their review, merge, and approved bypass
-permissions. When updating an assigned existing PR, keep its head repository
-and branch.
+Maintainers retain their review, merge, and approved bypass permissions. When
+updating an assigned existing PR, keep its head repository and branch.
 
 Before publishing, verify the authenticated GitHub account with
 `gh api user --jq .login` and confirm it matches the requesting contributor.
 Inspect the actual fetch and push URLs with `git remote -v`; preserve existing
 remotes. Remote names do not establish ownership or the intended destination.
-Fetch the intended upstream base before comparing or refreshing a branch.
+Fetch the intended base before comparing or refreshing a branch.
 
 Before each push, verify the destination repository's push URL, destination ref,
 remote head, and author of any existing PR. Stop on unexpected changes. After replacing
-`UPSTREAM_REMOTE` and `BRANCH` with the verified values and
+`PUSH_REMOTE`, `BASE_REPOSITORY`, `BASE_BRANCH`, `HEAD`, and `BRANCH` with the verified values and
 writing the PR description to `/tmp/enterprise-pr.md`, publish with explicit
 head and base repositories:
 
 ```sh
-git push UPSTREAM_REMOTE HEAD:refs/heads/BRANCH
-gh pr create --repo openclaw/openclaw-enterprise --base main \
-  --head BRANCH --title "Describe the change" \
+git push PUSH_REMOTE HEAD:refs/heads/BRANCH
+gh pr create --repo BASE_REPOSITORY --base BASE_BRANCH \
+  --head HEAD --title "Describe the change" \
   --body-file /tmp/enterprise-pr.md
 ```
 
-Use the intended target branch in `--base` when it differs from `main`.
 An explicit `--head` keeps `gh pr create` from choosing where to push the branch.
-
-Leave **Allow edits from maintainers** enabled for fork PRs. The GitHub CLI
-enables it by default; omit `--no-maintainer-edit` and verify
-`maintainer_can_modify` is `true` on the created PR. This lets maintainers commit
-fixes and prepare the branch for merging. If the fork contains Actions
-workflows, GitHub also grants workflow-edit access that can expose fork secrets;
-enable that broader access only when acceptable and record it in the PR. See
-[GitHub's maintainer-edit permissions](https://docs.github.com/en/pull-requests/how-tos/work-with-forks/allowing-changes-to-a-pull-request-branch-created-from-a-fork).
 
 - Keep one coherent change per PR. Stack only when a dependency is real, and
   link the prerequisite PR and intended base.

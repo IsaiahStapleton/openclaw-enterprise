@@ -27,8 +27,7 @@ owns author, review, and merge permissions.
       merge under the [Console rules](../../../../AGENTS.md#console-storybook).
 - [ ] **Publication safety:** Inspect the full diff and attachments for secrets,
       private data, internal names, and personal paths. Verify the contributor,
-      destination repository, ref, and remote head. Use an authorized upstream
-      topic branch unless the user selected another destination.
+      destination repository, ref, and remote head.
 - [ ] **Review and CI:** Describe the problem, resulting behavior, and evidence.
       Before merge, satisfy applicable review, resolve substantive findings and
       holds, and verify required CI at the final head. Do not claim an independent

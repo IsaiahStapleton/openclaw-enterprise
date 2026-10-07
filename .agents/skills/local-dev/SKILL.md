@@ -65,14 +65,10 @@ THE REVISED DESIGN RESOLVES THE BOUNDARY VIOLATION AND THE USER APPROVES IT.
    before merging. A green ordinary PR check does not replace this workflow.
 6. When publication is authorized, follow the
    [PR policy](../../../CONTRIBUTING.md#prepare-a-pull-request).
-   Default new PRs to an authorized topic branch in `openclaw/openclaw-enterprise`.
-   Do not create or select a fork unless explicitly requested; report missing
-   upstream push access instead.
    Verify identity, repository URLs, and the push destination. Preserve existing
    remotes; their names do not establish ownership. Preserve the head repository
-   and branch when updating an assigned existing PR. Use the verified upstream
-   base for branch comparisons and reviews. Keep fork PRs editable by maintainers
-   as described in the contribution policy.
+   and branch when updating an assigned existing PR. Use the verified base for
+   branch comparisons and reviews.
    Complete the [PR readiness checklist](./references/pr-readiness.md) before
    requesting review and recheck its merge requirements at the final PR head.
 7. Report changed behavior, the flow updated (or a short reason none is needed),
