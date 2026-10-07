@@ -92,7 +92,10 @@ export type HumanAuthenticationDenial =
  * An external identity attached to a disabled account. Only the person the provider just
  * authenticated as that identity learns it; any other refusal stays indistinguishable.
  */
-export const DISABLED_EXTERNAL_ACCOUNT = Object.freeze({ disabled: true as const });
+export interface DisabledExternalAccount {
+  readonly disabled: true;
+  readonly userId: string;
+}
 
 /** A duplicate account email; the caller maps it to its own conflict response. */
 export class UserAlreadyExistsError extends ResourceConflictError {
@@ -595,7 +598,7 @@ export class PostgresHumanAuthentication {
     providerId: string,
     subject: string,
     attemptCreatedAt?: Date,
-  ): Promise<HumanAuthenticationSnapshot | typeof DISABLED_EXTERNAL_ACCOUNT | undefined> {
+  ): Promise<HumanAuthenticationSnapshot | DisabledExternalAccount | undefined> {
     if (providerId === "credential") {
       return undefined;
     }
@@ -609,8 +612,9 @@ export class PostgresHumanAuthentication {
         return undefined;
       }
       const user = await this.lockUser(unit, method.user_id as string);
-      // The identity is attached to this user, so a disabled account may say so; every other
-      // refusal (unenrolled, a changed method) stays generic.
+      // The identity is attached to this user, so a disabled account says so, even for an
+      // attempt started before the disable; every other refusal (unenrolled, an attempt older
+      // than another account change) stays generic.
       return this.snapshotOrDisabled(unit, user, providerId, subject, attemptCreatedAt);
     });
   }
@@ -638,7 +642,7 @@ export class PostgresHumanAuthentication {
     providerId: string,
     subject?: string,
     attemptCreatedAt?: Date,
-  ): Promise<HumanAuthenticationSnapshot | typeof DISABLED_EXTERNAL_ACCOUNT | undefined> {
+  ): Promise<HumanAuthenticationSnapshot | DisabledExternalAccount | undefined> {
     const [association] = await this.query(
       unit,
       `SELECT 1 FROM occ.human_authentication_accounts WHERE user_id = $1`,
@@ -650,7 +654,9 @@ export class PostgresHumanAuthentication {
     }
     const account = await this.enrolled(unit, user.user_id as string);
     if (account.disabled !== false) {
-      return account.disabled === true ? DISABLED_EXTERNAL_ACCOUNT : undefined;
+      return account.disabled === true
+        ? Object.freeze({ disabled: true as const, userId: user.user_id as string })
+        : undefined;
     }
     const methods = await this.query(
       unit,
@@ -1278,17 +1284,27 @@ export class PostgresHumanAuthentication {
   /**
    * `provider` names the external sign-in provider whose callback was refused. A GitHub
    * membership denial (RFC-0061) also records the numeric GitHub `subject` that provider
-   * authenticated, so an administrator can tell whose sign-in the allowlist refused.
+   * authenticated, so an administrator can tell whose sign-in the allowlist refused. A
+   * disabled account's refusal records that account's `userId` for the same reason.
    */
   async recordDenied(
     reason: HumanAuthenticationDenial,
     provider?: "github" | "google" | "oidc",
-    identity?: { readonly subject: string },
+    identity?: { readonly subject: string } | { readonly userId: string },
   ): Promise<void> {
     const membership = reason === "MEMBERSHIP_REQUIRED" || reason === "MEMBERSHIP_UNAVAILABLE";
+    const disabledAccount =
+      reason === "ACCOUNT_DISABLED" &&
+      provider !== undefined &&
+      identity !== undefined &&
+      "userId" in identity &&
+      typeof identity.userId === "string" &&
+      identity.userId.length > 0;
     const githubSubject =
       provider === "github" &&
-      typeof identity?.subject === "string" &&
+      identity !== undefined &&
+      "subject" in identity &&
+      typeof identity.subject === "string" &&
       /^[1-9][0-9]{0,19}$/.test(identity.subject);
     if (
       ![
@@ -1301,7 +1317,11 @@ export class PostgresHumanAuthentication {
         "ACCOUNT_DISABLED",
       ].includes(reason) ||
       (provider !== undefined && !["github", "google", "oidc"].includes(provider)) ||
-      (membership ? !githubSubject : identity !== undefined)
+      (membership
+        ? !githubSubject
+        : reason === "ACCOUNT_DISABLED"
+          ? !disabledAccount
+          : identity !== undefined)
     ) {
       throw new ScopeViolationError("The authentication denial classification is invalid.");
     }
@@ -1321,7 +1341,11 @@ export class PostgresHumanAuthentication {
           ? {}
           : {
               details:
-                identity === undefined ? { provider } : { provider, subject: identity.subject },
+                identity === undefined
+                  ? { provider }
+                  : "subject" in identity
+                    ? { provider, subject: identity.subject }
+                    : { provider, userId: identity.userId },
             }),
       }),
     );

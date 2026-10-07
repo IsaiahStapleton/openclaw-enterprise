@@ -605,8 +605,8 @@ export function createHumanLogin(
   // The provider authenticated this identity and it is attached to a disabled account. Only
   // that person reaches this answer (the attempt is bound to their browser), so telling them
   // reveals nothing to anyone else; the response code becomes the Console's reason.
-  async function refuseDisabled(provider: ExternalProviderName): Promise<never> {
-    await state.recordDenied("ACCOUNT_DISABLED", provider);
+  async function refuseDisabled(provider: ExternalProviderName, userId: string): Promise<never> {
+    await state.recordDenied("ACCOUNT_DISABLED", provider, { userId });
     throw APIError.fromStatus("UNAUTHORIZED", {
       message: "Authentication was not accepted.",
       code: "ACCOUNT_DISABLED",
@@ -871,7 +871,7 @@ export function createHumanLogin(
                 return rejectExternal(name, "EXTERNAL_IDENTITY_REJECTED");
               }
               if ("disabled" in snapshot) {
-                return refuseDisabled(name);
+                return refuseDisabled(name, snapshot.userId);
               }
               const startedAt = performance.now();
               const session = await proofScope.run({ proof: snapshot.proof }, () =>

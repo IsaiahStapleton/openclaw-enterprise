@@ -872,6 +872,7 @@ test(
         // The attached identity learns its account is disabled; it still gets no proof.
         assert.deepEqual(await persistence.snapshotExternal(providerId, subject), {
           disabled: true,
+          userId: person.id,
         });
         assert.equal(
           await persistence.snapshotExternal(providerId, "unattached-subject"),

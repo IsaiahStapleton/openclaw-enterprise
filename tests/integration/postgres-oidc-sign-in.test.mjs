@@ -319,6 +319,11 @@ test(
         "ACCOUNT_DISABLED",
         "account-disabled",
       );
+      // The denial names the disabled account, so an administrator can tell whose sign-in it was.
+      const refusals = (await state.transact((unit) => unit.audit.list())).filter(
+        ({ reasonCode }) => reasonCode === "ACCOUNT_DISABLED",
+      );
+      assert.deepEqual(refusals.at(-1).details, { provider: "oidc", userId: disabled.id });
     });
 
     await t.test("the coverage report drops accounts once their identity is attached", async () => {
