@@ -206,3 +206,48 @@ test(
     assert.ok(browser.reset(), "a cut stream ends in a reset, not a clean close");
   },
 );
+
+test(
+  "the native admin WebSocket relay keeps queued bytes when the gateway socket errors after its clean close",
+  testOptions,
+  async (t) => {
+    const reply = randomBytes(1_024);
+    const browser = await relayToHeldBrowser(t, reply);
+    // The browser answers the gateway's close frame just after the relay has finished its side
+    // of the gateway connection. The relay pipes that late frame into the ended gateway socket,
+    // which fails with EPIPE before it closes. The gateway still closed cleanly, so the frames
+    // queued for the browser must not be dropped. The 'pipe' listener sees the gateway socket
+    // before the relay pipes the browser into it, so the frame is pushed before that pipe ends;
+    // the EPIPE assertion fails if the frame ever stops reaching the gateway.
+    let gatewayError;
+    browser.socket.once("pipe", (gateway) => {
+      gateway.once("error", (error) => {
+        gatewayError = error;
+      });
+      gateway.once("finish", () => browser.socket.push(Buffer.from([0x88, 0x80, 0, 0, 0, 0])));
+    });
+
+    const cause = await browser.relayClosed;
+    assert.equal(cause.reason, "upstream_disconnect");
+    assert.equal(gatewayError?.code, "EPIPE", "the late browser frame failed the gateway socket");
+    assert.ok(browser.socket.writableEnded, "the relay ended the browser after the gateway EOF");
+    assert.ok(browser.socket.writableLength > 0, "the frames are still queued for the browser");
+    assert.equal(
+      browser.socket.destroyed,
+      false,
+      "the relay keeps a browser that is still reading",
+    );
+
+    while (browser.held.length > 0) {
+      browser.held.shift()();
+      await nextTurn();
+    }
+    assert.ok(browser.finished(), "the browser saw a clean EOF");
+    const received = browser.bytes();
+    const body = received.subarray(received.indexOf("\r\n\r\n") + 4);
+    assert.ok(body.equals(reply), "the browser received every frame byte");
+    browser.socket.push(null);
+    await bound(browser.closed, "browser close");
+    assert.equal(browser.reset(), false, "a drained browser gets a clean close");
+  },
+);
