@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   codexRepositoryEvidenceScript,
   completedToolResult,
@@ -194,6 +195,7 @@ ${commandSpecs.map(({ operation, workdir, argv }) => `${operation}: working dire
 ${commandSpecs.map(({ operation, workdir, argv }) => `${operation}: working directory=${JSON.stringify(workdir)}, command=${JSON.stringify(argv.map(quoteArgument).join(" "))}`).join("\n")}`;
   const prompt = readOnly ? readOnlyPrompt : dedicated ? dedicatedPrompt : embeddedPrompt;
 
+  const taskDeadline = Date.now() + 600_000;
   let taskFailure;
   let taskTransport = { outcome: "unresolved" };
   try {
@@ -239,21 +241,42 @@ ${commandSpecs.map(({ operation, workdir, argv }) => `${operation}: working dire
   });
   // A timeout is an unknown mutation outcome. Read actual trace and provider
   // state once; never replay a model task or create the PR in the runner.
-  const trace = JSON.parse(
-    await exec(sessionEvidenceScript, [
-      sessionKey,
-      marker,
-      commandTool,
-      marker,
-      JSON.stringify({
-        toolNames,
-        commands: commandSpecs,
-      }),
-    ]),
-  );
-  const nativeTrace = dedicated
-    ? JSON.parse(await exec(codexRepositoryEvidenceScript, [marker, JSON.stringify(commandSpecs)]))
-    : undefined;
+  const readNativeTrace = async () =>
+    JSON.parse(await exec(codexRepositoryEvidenceScript, [marker, JSON.stringify(commandSpecs)]));
+  let nativeTrace = dedicated ? await readNativeTrace() : undefined;
+  // The gateway can finish its HTTP response while its native Codex turn is
+  // still running. Observe that same turn; never submit the task again.
+  while (nativeTrace?.status === "inProgress") {
+    assert.ok(Date.now() < taskDeadline, "native repository turn must finish within ten minutes");
+    await delay(1_000);
+    nativeTrace = await readNativeTrace();
+  }
+  const readTrace = async () =>
+    JSON.parse(
+      await exec(sessionEvidenceScript, [
+        sessionKey,
+        marker,
+        commandTool,
+        marker,
+        JSON.stringify({
+          toolNames,
+          commands: commandSpecs,
+        }),
+      ]),
+    );
+  let trace = await readTrace();
+  // Native completion and its gateway transcript are separate deliveries. Wait
+  // for this exact turn's terminal mirror before checking all evidence below.
+  while (
+    nativeTrace?.status === "completed" &&
+    !trace.codexTurns?.some(
+      (turn) => turn.turnPrefix === nativeTrace.turnId && turn.terminalAssistantSeen,
+    )
+  ) {
+    assert.ok(Date.now() < taskDeadline, "native repository completion must reach its gateway");
+    await delay(1_000);
+    trace = await readTrace();
+  }
   if (nativeTrace) {
     await f.record("Captured native Codex command diagnostics; repository acceptance pending", {
       evidenceKind: "diagnostic-only",
