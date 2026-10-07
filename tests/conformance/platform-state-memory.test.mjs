@@ -134,6 +134,7 @@ test("memory Agent deletion completion removes the AccessBindings the PostgreSQL
     binding(agent.servicePrincipalId, "configuration", configuration.id),
   ];
   const surviving = binding(human.id, "configuration", configuration.id);
+  // Their own Role, so the final deleteRole(role) still proves no removed binding holds role.
   const siblingRole = { ...role, id: `role_${randomUUID()}` };
   const siblingBindings = [
     binding(human.id, "agent", sibling.id),
@@ -184,6 +185,16 @@ test("memory Agent deletion completion removes the AccessBindings the PostgreSQL
   assert.equal(await store.completeAgentDeletion(namespace.id, agent.id), false);
   const actorId = `prn_${randomUUID()}`;
   const promised = await store.transact(async (unit) => {
+    // Stop, then Delete: the Agent's stop work stays pending, because memory never runs work.
+    await unit.operations.append({
+      kind: "agent",
+      action: "reconcile",
+      target: "stopped",
+      namespaceId: namespace.id,
+      resourceId: agent.id,
+      operationId: `op_${randomUUID()}`,
+      actorId,
+    });
     await unit.agents.transitionAgentDesiredRuntimeState(
       namespace.id,
       agent.id,
@@ -203,19 +214,8 @@ test("memory Agent deletion completion removes the AccessBindings the PostgreSQL
     sorted(promised),
     sorted(removed.map(({ namespaceId: _namespaceId, ...listed }) => listed)),
   );
-  // A deleting Agent without its recorded teardown work is not an admitted deletion, and
-  // its stop work is not that work.
-  await store.transact((unit) =>
-    unit.operations.append({
-      kind: "agent",
-      action: "reconcile",
-      target: "stopped",
-      namespaceId: namespace.id,
-      resourceId: agent.id,
-      operationId: `op_${randomUUID()}`,
-      actorId: `prn_${randomUUID()}`,
-    }),
-  );
+  // A deleting Agent without its recorded teardown work is not an admitted deletion; the stop
+  // work recorded before admission is not that work.
   assert.equal(await store.completeAgentDeletion(namespace.id, agent.id), false);
   const work = {
     kind: "agent",
@@ -232,6 +232,7 @@ test("memory Agent deletion completion removes the AccessBindings the PostgreSQL
     resourceId: revision.id,
     actorId,
   };
+  // Other Agent work in the Namespace, which completion leaves pending.
   const siblingWork = [
     { ...work, target: "stopped", resourceId: sibling.id, operationId: `op_${randomUUID()}` },
     { ...revisionWork, resourceId: siblingRevision.id },
