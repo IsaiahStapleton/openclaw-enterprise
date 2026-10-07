@@ -90,10 +90,14 @@ async function startGateway(t, reply) {
   return server.address().port;
 }
 
-function heldBrowserSocket(t) {
+// A browser socket whose writes complete only when the test releases them, relayed to a gateway
+// that answers with `reply` and closes. Resolves the relay's close cause.
+async function relayToHeldBrowser(t, reply, relayOptions = {}) {
+  const port = await startGateway(t, reply);
   const chunks = [];
   const held = [];
   let finished = false;
+  let reset = false;
   const socket = new Duplex({
     read() {},
     write(chunk, _encoding, callback) {
@@ -105,10 +109,51 @@ function heldBrowserSocket(t) {
       callback();
     },
   });
+  // A net.Socket closes with a TCP reset here; record it.
+  socket.resetAndDestroy = () => {
+    reset = true;
+    return socket.destroy();
+  };
   socket.on("error", () => {});
   t.after(() => socket.destroy());
   const closed = new Promise((resolve) => socket.once("close", resolve));
-  return { socket, closed, held, bytes: () => Buffer.concat(chunks), finished: () => finished };
+  let resolveClosed;
+  const relayClosed = new Promise((resolve) => {
+    resolveClosed = resolve;
+  });
+
+  proxyNativeAdminWebSocket({
+    request: {
+      method: "GET",
+      url: "/session/socket",
+      headers: {
+        origin: agentOrigin,
+        "sec-websocket-key": randomBytes(16).toString("base64"),
+        "sec-websocket-version": "13",
+      },
+    },
+    socket,
+    head: Buffer.alloc(0),
+    context: {
+      gatewayBase: `https://localhost:${port}/`,
+      agentOrigin,
+      apiKey: "relay-test-key",
+    },
+    connectionId: "relay-test",
+    lease: async () => undefined,
+    onConnect: async () => {},
+    onClose: resolveClosed,
+    ...relayOptions,
+  });
+  return {
+    socket,
+    closed,
+    held,
+    relayClosed: bound(relayClosed, "relay close"),
+    bytes: () => Buffer.concat(chunks),
+    finished: () => finished,
+    reset: () => reset,
+  };
 }
 
 test(
@@ -118,37 +163,9 @@ test(
     // Smaller than the browser socket's high-water mark, so the pipe never pauses the gateway:
     // its EOF and close reach the relay while the frames still wait behind the first held write.
     const reply = randomBytes(1_024);
-    const port = await startGateway(t, reply);
-    const browser = heldBrowserSocket(t);
-    let resolveClosed;
-    const relayClosed = new Promise((resolve) => {
-      resolveClosed = resolve;
-    });
+    const browser = await relayToHeldBrowser(t, reply);
 
-    proxyNativeAdminWebSocket({
-      request: {
-        method: "GET",
-        url: "/session/socket",
-        headers: {
-          origin: agentOrigin,
-          "sec-websocket-key": randomBytes(16).toString("base64"),
-          "sec-websocket-version": "13",
-        },
-      },
-      socket: browser.socket,
-      head: Buffer.alloc(0),
-      context: {
-        gatewayBase: `https://localhost:${port}/`,
-        agentOrigin,
-        apiKey: "relay-test-key",
-      },
-      connectionId: "relay-test",
-      lease: async () => undefined,
-      onConnect: async () => {},
-      onClose: resolveClosed,
-    });
-
-    const cause = await bound(relayClosed, "relay close");
+    const cause = await browser.relayClosed;
     assert.equal(cause.reason, "upstream_disconnect");
     assert.ok(browser.socket.writableEnded, "the relay ended the browser after the gateway EOF");
     assert.ok(browser.socket.writableLength > 0, "the frames are still queued for the browser");
@@ -170,5 +187,22 @@ test(
     assert.ok(body.equals(reply), "the browser received every frame byte");
     browser.socket.push(null);
     await bound(browser.closed, "browser close");
+    assert.equal(browser.reset(), false, "a drained browser gets a clean close");
+  },
+);
+
+test(
+  "the native admin WebSocket relay resets a browser that never reads after the drain timeout",
+  testOptions,
+  async (t) => {
+    const browser = await relayToHeldBrowser(t, randomBytes(1_024), {
+      clientDrainTimeoutMs: 1_000,
+    });
+
+    await browser.relayClosed;
+    assert.equal(browser.socket.destroyed, false, "the browser gets time to read");
+    await bound(browser.closed, "browser close after the drain timeout");
+    assert.equal(browser.finished(), false, "the stuck browser never got a clean EOF");
+    assert.ok(browser.reset(), "a cut stream ends in a reset, not a clean close");
   },
 );

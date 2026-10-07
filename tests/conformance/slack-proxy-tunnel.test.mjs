@@ -172,6 +172,7 @@ function heldClientTunnel(t, upstreamPort, serverOptions) {
   const chunks = [];
   const held = [];
   let finished = false;
+  let reset = false;
   const client = new Duplex({
     read() {},
     write(chunk, _encoding, callback) {
@@ -183,6 +184,11 @@ function heldClientTunnel(t, upstreamPort, serverOptions) {
       callback();
     },
   });
+  // A net.Socket closes with a TCP reset here; record it.
+  client.resetAndDestroy = () => {
+    reset = true;
+    return client.destroy();
+  };
   client.on("error", () => {});
   t.after(() => client.destroy());
   const closed = new Promise((resolve) => client.once("close", resolve));
@@ -195,6 +201,7 @@ function heldClientTunnel(t, upstreamPort, serverOptions) {
     held,
     bytes: () => Buffer.concat(chunks),
     finished: () => finished,
+    reset: () => reset,
   };
 }
 
@@ -232,18 +239,19 @@ test(
     assert.ok(body.equals(reply), "the client received the whole reply");
     tunnel.client.push(null);
     await bound(tunnel.closed, "client close");
+    assert.equal(tunnel.reset(), false, "a drained client gets a clean close");
   },
 );
 
 test(
-  "a client that never reads its queued bytes is closed after the drain timeout",
+  "a client that never reads its queued bytes is reset after the drain timeout",
   testOptions,
   async (t) => {
     const upstream = await listen(t, (socket) => {
       socket.on("error", () => {});
       socket.end("never-read");
     });
-    const tunnel = heldClientTunnel(t, upstream.address().port, { clientDrainTimeoutMs: 200 });
+    const tunnel = heldClientTunnel(t, upstream.address().port, { clientDrainTimeoutMs: 1_000 });
 
     await bound(
       new Promise((resolve) => tunnel.upstreamSocket().once("close", resolve)),
@@ -253,6 +261,7 @@ test(
     assert.equal(tunnel.client.destroyed, false, "the client gets time to read");
     await bound(tunnel.closed, "client close after the drain timeout");
     assert.equal(tunnel.finished(), false, "the stuck client never got a clean EOF");
+    assert.ok(tunnel.reset(), "a cut reply ends in a reset, not a clean close");
   },
 );
 
@@ -311,10 +320,15 @@ test(
 
     const reset = await openTunnel(t, proxyPort, "slack.com:443");
     assert.match(reset.head, established);
+    const errors = [];
+    reset.socket.on("error", (error) => errors.push(error.code));
     reset.socket.write("ping");
     await bound(reset.closed, "client close after the upstream reset");
     // Once the tunnel is open, a failure only closes it: no status line goes into the stream.
     assert.equal(reset.body().length, 0, `unexpected bytes after the reset: ${reset.body()}`);
+    // A reset, not a clean EOF, so the client cannot take a cut reply as whole.
+    assert.equal(reset.sawEnd(), false, "the client saw no clean EOF");
+    assert.deepEqual(errors, ["ECONNRESET"]);
 
     const next = await openTunnel(t, proxyPort, "slack.com:443");
     assert.match(next.head, established);

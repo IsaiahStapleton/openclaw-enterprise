@@ -34,8 +34,9 @@ const HTTP_PROXY_TIMEOUT_MS = 30_000;
 const WS_UPGRADE_TIMEOUT_MS = 30_000;
 const WS_LEASE_INTERVAL_MS = 25_000;
 const WS_LEASE_TIMEOUT_MS = 5_000;
-// How long a browser may take to read what is still queued for it after the gateway closed.
-const WS_CLIENT_DRAIN_TIMEOUT_MS = 30_000;
+// How long a browser may take to read what is still queued for it, and close its side, after
+// the gateway closed.
+const WS_CLIENT_DRAIN_TIMEOUT_MS = 10_000;
 const NATIVE_ADMIN_RESERVED_PREFIX = "/__occ/native-admin/";
 const SERVICE_WORKER_CSP = "worker-src 'none'";
 // The native UI renders `/api/users/<id>/avatar` as a plain <img>. Without an
@@ -413,12 +414,29 @@ async function boundedLease(
   }
 }
 
+// Closes the browser socket now. If bytes are still queued for it, reset the connection
+// instead of sending a FIN where the socket allows it (a TLS socket does not), so a cut stream
+// does not look like a clean close.
+function cutClient(socket: Socket): void {
+  if (!socket.writableFinished) {
+    try {
+      socket.resetAndDestroy();
+      return;
+    } catch {
+      // Not a TCP handle; fall through to a plain close.
+    }
+  }
+  socket.destroy();
+}
+
 // Called once the gateway's upgraded socket has closed. When pipe() already ended the browser's
 // socket on the gateway's clean EOF, bytes can still be queued for a slow browser (the last
-// frames, often the close frame), and destroy() would drop them. So keep the socket until the
-// browser has read everything and closed its side, bounded by the drain timeout. Otherwise
-// close it now.
-function closeClientAfterUpstream(socket: Socket): void {
+// frames, often the close frame), and destroy() would drop them. Even after they are flushed,
+// a close with unread browser bytes makes the kernel reset the connection and drop the tail.
+// So linger: discard what the browser sends, keep the socket until it has read everything and
+// closed its side, and cut it at `drainTimeoutMs`. Otherwise close it now. Same logic as
+// closeClientWhenDrained in slack-proxy.mjs, which runs standalone and cannot share it.
+function closeClientWhenDrained(socket: Socket, drainTimeoutMs: number): void {
   if (socket.destroyed) {
     return;
   }
@@ -426,10 +444,8 @@ function closeClientAfterUpstream(socket: Socket): void {
     socket.destroy();
     return;
   }
-  // Nothing reads the browser's bytes any more; discard them, so its EOF can arrive and the
-  // socket closes once our end has flushed.
   socket.resume();
-  const timer = setTimeout(() => socket.destroy(), WS_CLIENT_DRAIN_TIMEOUT_MS);
+  const timer = setTimeout(() => cutClient(socket), drainTimeoutMs);
   timer.unref();
   socket.once("close", () => clearTimeout(timer));
 }
@@ -443,6 +459,8 @@ export function proxyNativeAdminWebSocket(options: {
   readonly lease: () => Promise<NativeAdminWebSocketCloseReason | undefined>;
   /** Defaults to 25 s; only tests shorten it. */
   readonly leaseIntervalMs?: number;
+  /** Defaults to 10 s; only tests shorten it. */
+  readonly clientDrainTimeoutMs?: number;
   readonly onConnect: () => Promise<void>;
   readonly onClose: (cause: NativeAdminWebSocketCloseCause) => void;
 }): void {
@@ -494,7 +512,10 @@ export function proxyNativeAdminWebSocket(options: {
     upstreamRequest.destroy();
     upstreamSocket?.destroy();
     if (upstreamClosed) {
-      closeClientAfterUpstream(options.socket);
+      closeClientWhenDrained(
+        options.socket,
+        options.clientDrainTimeoutMs ?? WS_CLIENT_DRAIN_TIMEOUT_MS,
+      );
     } else {
       options.socket.destroy();
     }
