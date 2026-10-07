@@ -309,7 +309,7 @@ function isIpv4Cidr(value, requiredPrefix) {
   return requiredPrefix === undefined || prefix === requiredPrefix;
 }
 
-function validateNativeAdminDomains(domain, sharedCookieDomain, diagnostics) {
+function validateNativeAdminDomains(domain, sharedCookieDomain, authBaseUrl, diagnostics) {
   const lowerDomain = domain.toLowerCase();
   const lowerSharedCookieDomain = sharedCookieDomain.toLowerCase();
   if (!dnsHostname.test(lowerDomain)) {
@@ -331,6 +331,24 @@ function validateNativeAdminDomains(domain, sharedCookieDomain, diagnostics) {
     diagnostics.errors.push(
       "controlPlane.agentNativeAdminDomain must be inside controlPlane.sharedCookieDomain.",
     );
+  }
+  // The API refuses these at startup: shared session cookies are secure-only, and the
+  // console host must be inside their parent.
+  let baseUrl;
+  try {
+    baseUrl = new URL(authBaseUrl);
+  } catch {
+    baseUrl = undefined;
+  }
+  if (baseUrl?.protocol !== "https:") {
+    diagnostics.errors.push("controlPlane.authBaseUrl must use HTTPS with native admin.");
+  } else if (dnsHostname.test(lowerSharedCookieDomain)) {
+    const host = baseUrl.hostname.replace(/\.$/, "");
+    if (host !== lowerSharedCookieDomain && !host.endsWith(`.${lowerSharedCookieDomain}`)) {
+      diagnostics.errors.push(
+        "controlPlane.authBaseUrl host must be inside controlPlane.sharedCookieDomain.",
+      );
+    }
   }
 }
 
@@ -807,7 +825,12 @@ function buildRendered(profile, parsed, diagnostics) {
       ["controlPlane", "sharedCookieDomain"],
       diagnostics,
     );
-    validateNativeAdminDomains(agentNativeAdminDomain, sharedCookieDomain, diagnostics);
+    validateNativeAdminDomains(
+      agentNativeAdminDomain,
+      sharedCookieDomain,
+      authBaseUrl,
+      diagnostics,
+    );
     agentNativeAdmin = { enabled: true, domain: agentNativeAdminDomain, sharedCookieDomain };
   }
   const envoyNamespace =
