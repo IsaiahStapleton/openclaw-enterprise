@@ -211,6 +211,8 @@ test("service API keys authenticate scoped automation without replacing sessions
         .find((event) => event.kind === "authorization_denial");
       assert.equal(denial.actorId, principal.id);
       assert.equal(denial.details?.actorServiceKeyId, second.data.id);
+      // The acting key joins the denial's IAM evidence; it does not replace it.
+      assert.equal(denial.details.iamEvidence.identityId, principal.id);
       // Session requests carry no key; key management names the key acted on and its name.
       for (const id of configurationIds) {
         const deleted = await fetch(`${origin}/namespaces/${namespaceId}/configurations/${id}`, {
