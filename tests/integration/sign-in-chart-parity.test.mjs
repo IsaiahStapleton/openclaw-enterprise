@@ -1106,7 +1106,7 @@ test("the chart refuses native admin base URLs the API refuses at startup", tool
 // The bootstrap Job's own check, run as the chart's Job runs it (NODE_ENV=production). Its
 // database is unreachable, so an accepted base URL ends at PERSISTENCE_UNAVAILABLE.
 async function jobCode(baseUrl) {
-  const stderr = await new Promise((resolve) => {
+  const result = await new Promise((resolve) => {
     execFile(
       process.execPath,
       ["scripts/bootstrap-installation.mjs"],
@@ -1122,15 +1122,16 @@ async function jobCode(baseUrl) {
         },
         timeout: 20_000,
       },
-      (_error, _stdout, output) => resolve(output),
+      (error, _stdout, output) => resolve({ killed: error?.killed === true, output }),
     );
   });
-  const failure = stderr
+  assert.ok(!result.killed, `the bootstrap Job timed out for ${JSON.stringify(baseUrl)}`);
+  const failure = result.output
     .split("\n")
-    .filter((line) => line.startsWith("{"))
+    .filter((line) => line.startsWith("{") && line.endsWith("}"))
     .map((line) => JSON.parse(line))
     .find(({ event }) => event === "installation.bootstrap-failed");
-  assert.ok(failure, stderr);
+  assert.ok(failure, result.output);
   return failure.code;
 }
 
@@ -1219,13 +1220,15 @@ test(
         "http://localhost.oce.example.internal",
       ].map((baseUrl) => ({ baseUrl, chart: plainHttp, api: true, job: false })),
       // Deliberately stricter: Node repairs these degenerate spellings into an origin, or
-      // reads a shorthand IPv4 address as 127.0.0.1.
+      // reads another IPv4 spelling (shorthand, octal, hex, trailing dot) as 127.0.0.1.
       ...[
         ["https:console.oce.example.internal", notOrigin],
         ["https://console.oce.example.internal/.", notOrigin],
         ["https://console.oce.example.internal/%2e", notOrigin],
         ["http://127.1", plainHttp],
         ["http://2130706433", plainHttp],
+        ["http://0177.0.0.1", plainHttp],
+        ["http://127.0.0.1.", plainHttp],
       ].map(([baseUrl, chart]) => ({ baseUrl, chart, api: true, job: true })),
     ];
     await eachBounded(cases, async ({ baseUrl, chart, api, job }) => {
@@ -1274,8 +1277,9 @@ test(
 
 // The chart's sign-in checks read the scheme as URL parsing does, like the API: an uppercase
 // HTTPS origin, or one with surrounding spaces, passes for GitHub, Google and OIDC. Plain HTTP
-// stays refused even on loopback, where the bootstrap Job would accept it: production external
-// sign-in requires HTTPS (createControllerAuth, after the database opens).
+// stays refused even on loopback, where the bootstrap Job would accept it. The API also requires
+// HTTPS for production external sign-in, but only after its database opens, so only the chart's
+// refusal is checked here.
 test("external sign-in accepts the HTTPS spellings the API accepts", tooling, async (t) => {
   const directory = await startupDirectory(t);
   const cases = [];
