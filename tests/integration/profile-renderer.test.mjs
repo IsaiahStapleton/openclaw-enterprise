@@ -666,7 +666,7 @@ test("preflight rejects metrics and native admin inputs that Helm would reject",
         sharedCookieDomain,
       },
     });
-  for (const sharedCookieDomain of ["co.uk", "github.io", "CO.UK"]) {
+  for (const sharedCookieDomain of ["co.uk", "github.io", "CO.UK", "192.0.2.1"]) {
     assertPreflightFailure(
       "codex",
       nativeAdminUnder(sharedCookieDomain),

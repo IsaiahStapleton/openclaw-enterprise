@@ -89,8 +89,8 @@ supplied.
 
 Preflight applies the downstream contracts for IPv4 CIDRs, native-admin DNS
 hostnames and their shared cookie parent domain (not a public suffix, checked
-with the API's `tldts` list), and paired metrics scraper selectors. Invalid values therefore fail before `values.yaml` or
-`installation.yaml` is written.
+with the API's `tldts` list), and paired metrics scraper selectors. Invalid
+values therefore fail before `values.yaml` or `installation.yaml` is written.
 
 ### 4. Build Helm values
 

@@ -365,10 +365,13 @@ function isIpv4Cidr(value, requiredPrefix) {
 // list without a new root dependency; load it only when native admin is configured.
 function isPublicSuffix(hostname) {
   const require = createRequire(new URL("../apps/controller/package.json", import.meta.url));
-  const parsed = require("tldts").parse(hostname, {
-    allowPrivateDomains: true,
-    validateHostname: true,
-  });
+  let tldts;
+  try {
+    tldts = require("tldts");
+  } catch {
+    return undefined;
+  }
+  const parsed = tldts.parse(hostname, { allowPrivateDomains: true, validateHostname: true });
   return parsed.isIp || parsed.domain === null || parsed.publicSuffix === hostname;
 }
 
@@ -384,8 +387,15 @@ function validateNativeAdminDomains(domain, sharedCookieDomain, authBaseUrl, dia
     diagnostics.errors.push(
       "controlPlane.sharedCookieDomain must be a DNS hostname without a wildcard, port, scheme, or path.",
     );
-  } else if (isPublicSuffix(lowerSharedCookieDomain)) {
-    diagnostics.errors.push("controlPlane.sharedCookieDomain must not be a public suffix.");
+  } else {
+    const publicSuffix = isPublicSuffix(lowerSharedCookieDomain);
+    if (publicSuffix === undefined) {
+      diagnostics.errors.push(
+        "controlPlane.sharedCookieDomain needs the public suffix list: run pnpm install first.",
+      );
+    } else if (publicSuffix) {
+      diagnostics.errors.push("controlPlane.sharedCookieDomain must not be a public suffix.");
+    }
   }
   if (
     dnsHostname.test(lowerDomain) &&
