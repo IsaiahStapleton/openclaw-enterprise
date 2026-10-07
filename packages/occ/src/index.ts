@@ -195,7 +195,6 @@ import {
   type PlatformOperation,
   type PlatformStateStore,
   type PlatformUnitOfWork,
-  type SecretReferenceKind,
 } from "./state/platform-state.ts";
 import {
   controllerWorkDeploymentStatus,
@@ -750,6 +749,9 @@ const SECRET_CONSUMER_KINDS = Object.freeze([
   "credentialSources",
   "provisioningRequests",
 ] as const);
+type SecretReferenceKind = Awaited<
+  ReturnType<PlatformReadView["secrets"]["listReferences"]>
+>["references"][number]["kind"];
 const SECRET_CONSUMER_FIELDS: Readonly<
   Record<SecretReferenceKind, (typeof SECRET_CONSUMER_KINDS)[number]>
 > = Object.freeze({
