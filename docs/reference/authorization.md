@@ -181,10 +181,15 @@ binding additionally identifies the resource kind and ID.
 
 ## Manage Namespace policy
 
-Use `/namespaces/:namespaceId/iam/roles` and
-`/namespaces/:namespaceId/iam/access-bindings`. Collection `GET` lists policy in
+Use `/namespaces/:namespaceId/iam/roles`,
+`/namespaces/:namespaceId/iam/access-bindings`, and
+`/namespaces/:namespaceId/iam/service-principals`. Collection `GET` lists policy in
 that Namespace and `POST` creates a server-identified resource. Item `GET`
-reads one resource; item `DELETE` removes only that resource. Reads return
+reads one resource; item `DELETE` removes only that resource (Roles and
+AccessBindings). A ServicePrincipal created here is a non-Agent identity fixed
+to the Namespace with no grant; bind it like any subject and issue its
+[service key](authentication/service-api-keys.md). The API cannot delete one yet:
+revoke its keys and AccessBindings to remove its access. Reads return
 `200`, creation `201`, deletion `204`, and missing resources `404`.
 The [Namespace IAM policy flow](../flows/namespace-iam-policy.md) traces the
 controller, Driver, persistence, and audit path.
