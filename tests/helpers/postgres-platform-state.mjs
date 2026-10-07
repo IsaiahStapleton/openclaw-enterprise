@@ -18,7 +18,7 @@ import {
   kubernetesHash,
   validateExplicitK3dLoopbackContext,
 } from "../helpers/kubernetes-real.mjs";
-import { availablePort } from "./available-port.mjs";
+import { reservePort, reservedPortChild } from "./available-port.mjs";
 import { stopProcess } from "./stop-process.mjs";
 
 const repository = fileURLToPath(new URL("../..", import.meta.url));
@@ -373,7 +373,11 @@ function admitted(values) {
 }
 
 async function startController(context, { kubernetesDrivers = false } = {}) {
-  const port = await availablePort();
+  // The port is part of the auth base URL. Hold it until the child binds it.
+  const reservation = await reservePort();
+  context.after(reservation.release);
+  const { port } = reservation;
+  const reserved = reservedPortChild(reservation);
   const driverEnvironment = await configuredDriverEnvironment(context, kubernetesDrivers);
   const configurationRoot = await mkdtemp(join(tmpdir(), "openclaw-postgres-configurations-"));
   context.after(async () => {
@@ -387,10 +391,11 @@ async function startController(context, { kubernetesDrivers = false } = {}) {
     authBaseURL: `http://127.0.0.1:${port}`,
     installationName: "PostgreSQL platform state integration",
   });
-  const child = spawn(process.execPath, [entrypoint], {
+  const child = spawn(process.execPath, [...reserved.execArgv, entrypoint], {
     cwd: repository,
     env: {
       ...process.env,
+      ...reserved.env,
       NODE_ENV: "development",
       OCC_HOST: "127.0.0.1",
       OCC_PORT: String(port),
@@ -422,6 +427,9 @@ async function startController(context, { kubernetesDrivers = false } = {}) {
         email: adminEmail,
         password: adminPassword,
       });
+      // Only the child can sign in, so it has bound the port; the reservation would otherwise
+      // keep taking (and resetting) a share of the connections.
+      await reservation.release();
       return { child, origin, session, output: () => output };
     } catch {
       await delay(40);

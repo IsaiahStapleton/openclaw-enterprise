@@ -18,6 +18,7 @@ import { createTestKubernetesComputeDriver } from "./kubernetes-compute.mjs";
 import { stopProcess } from "./stop-process.mjs";
 import { waitFor } from "./wait-for.mjs";
 import { ensureDevelopmentBootstrap } from "./bootstrap-installation.mjs";
+import { reservedPortChild } from "./available-port.mjs";
 import { databaseUrl, requiresPostgres } from "./postgres-database.mjs";
 
 export { databaseUrl, requiresPostgres };
@@ -440,13 +441,16 @@ export async function startBackendlessDevelopmentServer(context, options) {
     context.after(() => rm(configurationRoot, { recursive: true, force: true }));
   }
 
-  const child = spawn(process.execPath, [controllerEntrypoint], {
+  // `options.reservation` (from reservePort) holds the API port until the child binds it.
+  const reserved = reservedPortChild(options.reservation);
+  const child = spawn(process.execPath, [...reserved.execArgv, controllerEntrypoint], {
     cwd: repository,
     env: {
+      ...reserved.env,
       PATH: process.env.PATH,
       NODE_ENV: "development",
       OCC_HOST: "127.0.0.1",
-      OCC_PORT: String(options.port),
+      OCC_PORT: String(options.reservation.port),
       OCC_DATABASE_URL: databaseUrl,
       OCC_AUTH_BASE_URL: options.origin,
       OCC_AUTH_SECRET: options.authSecret,
@@ -471,5 +475,6 @@ export async function startBackendlessDevelopmentServer(context, options) {
     },
     15_000,
   );
+  await options.reservation.release();
   return { child };
 }
