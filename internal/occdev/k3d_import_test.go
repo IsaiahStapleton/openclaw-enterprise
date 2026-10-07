@@ -166,25 +166,27 @@ exec sleep 30
 }
 
 // flakyK3dImportCase is a fakeProfileCommands case for `k3d image import
-// --mode direct <archive> -c <cluster>`. Every call first checks that the
-// archive is still there. The first call then fails with k3d's closed-stream
-// error, and later calls fail with `then` or, when it is empty, succeed.
-func flakyK3dImportCase(t *testing.T, cluster, then string) string {
+// --mode direct <archive> -c <cluster>`. Unlike fakeK3dImport, it can fail each
+// attempt differently and check the archive the caller saved: every call first
+// checks that the archive is still there, the first call then fails with k3d's
+// closed-stream error, and later calls fail with laterFailure or, when it is
+// empty, succeed.
+func flakyK3dImportCase(t *testing.T, cluster, laterFailure string) string {
 	t.Helper()
 	directory := t.TempDir()
 	closed := filepath.Join(directory, "closed-stream")
-	later := filepath.Join(directory, "later")
+	laterFailureOutput := filepath.Join(directory, "later-failure")
 	if err := os.WriteFile(closed, []byte(k3dClosedStreamOutput+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(later, []byte(then), 0o600); err != nil {
+	if err := os.WriteFile(laterFailureOutput, []byte(laterFailure), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	marker := shellQuote(filepath.Join(directory, "failed-once"))
 	return `"image import --mode direct "*" -c ` + cluster + `")
   [ -s "$5" ] || { echo "archive missing at import: $5" >&2; exit 2; }
   if [ ! -e ` + marker + ` ]; then : > ` + marker + `; cat ` + shellQuote(closed) + ` >&2; exit 1; fi
-  if [ -s ` + shellQuote(later) + ` ]; then cat ` + shellQuote(later) + ` >&2; exit 1; fi
+  if [ -s ` + shellQuote(laterFailureOutput) + ` ]; then cat ` + shellQuote(laterFailureOutput) + ` >&2; exit 1; fi
   echo "INFO[0001] Successfully imported image(s)" ;;`
 }
 
@@ -242,18 +244,21 @@ func TestImportArchiveDirectDoesNotRetryAnotherFailureAfterAClosedStream(t *test
 func TestDevelopmentImageImportRetriesAClosedStreamAndVerifiesTheDigest(t *testing.T) {
 	state := kubernetesOnlyOpenShellState(t)
 	image := "ghcr.io/openclaw/runtime@" + profileTestDigest
+	// The staging name mirrors importDevelopmentImage on purpose, so the tag
+	// that reaches the cluster is pinned.
 	sum := sha256.Sum256([]byte(image))
 	staging := fmt.Sprintf("openclaw-development/import-%x:%s", sum[:6], state.Cluster)
 	recorded := "localhost/" + staging
 	reference := strings.TrimSuffix(recorded, ":"+state.Cluster) + "@" + profileTestDigest
+	server := "k3d-" + state.Cluster + "-server-0"
 	commands := fakeProfileCommands(t, map[string]string{
 		"podman": `"image inspect ` + staging + `") exit 1 ;;
 "tag ` + image + ` ` + staging + `") ;;
 "image inspect --format {{json .RepoTags}} ` + staging + `") echo '["` + recorded + `"]' ;;
 "image inspect --format {{.Os}}/{{.Architecture}} ` + recorded + `") echo linux/amd64 ;;
 "image save --output "*" ` + recorded + `") printf archive > "$4" ;;
-"exec k3d-occ-dev-owned-server-0 ctr -n k8s.io images list") echo "` + recorded + ` application/vnd.oci.image.manifest.v1+json ` + profileTestDigest + `" ;;
-"exec k3d-occ-dev-owned-server-0 ctr -n k8s.io images tag ` + recorded + ` ` + reference + `") ;;
+"exec ` + server + ` ctr -n k8s.io images list") echo "` + recorded + ` application/vnd.oci.image.manifest.v1+json ` + profileTestDigest + `" ;;
+"exec ` + server + ` ctr -n k8s.io images tag ` + recorded + ` ` + reference + `") ;;
 "image rm ` + recorded + `") ;;`,
 		"k3d": flakyK3dImportCase(t, state.Cluster, ""),
 	})
@@ -269,36 +274,4 @@ func TestDevelopmentImageImportRetriesAClosedStreamAndVerifiesTheDigest(t *testi
 		t.Fatalf("unexpected runtime reference: %q", got)
 	}
 	assertRetriedImport(t, commands(), filepath.Join(state.directory, "development-import.tar"), state.Cluster, stdout.String())
-}
-
-func TestOpenShellImageImportRetriesAClosedStreamAndVerifiesTheDigest(t *testing.T) {
-	state := kubernetesOnlyOpenShellState(t)
-	root := t.TempDir()
-	source := "ghcr.io/nvidia/openshell/gateway@" + profileTestDigest
-	staging := "openclaw-development/openshell-gateway:occ-dev-owned"
-	recorded := "localhost/" + staging
-	commands := fakeProfileCommands(t, map[string]string{
-		"podman": `"image inspect ` + source + `") ;;
-"image inspect ` + staging + `") exit 1 ;;
-"tag ` + source + ` ` + staging + `") ;;
-"image inspect --format {{json .RepoTags}} ` + staging + `") echo '["` + recorded + `"]' ;;
-"image inspect --format {{.Os}}/{{.Architecture}} ` + source + `") echo linux/amd64 ;;
-"image save --output "*" ` + recorded + `") printf archive > "$4" ;;
-"exec k3d-occ-dev-owned-server-0 ctr -n k8s.io images list") echo "` + recorded + ` application/vnd.oci.image.manifest.v1+json ` + profileTestDigest + `" ;;
-"exec k3d-occ-dev-owned-server-0 ctr -n k8s.io images tag ` + recorded + ` localhost/openclaw-development/openshell-gateway@` + profileTestDigest + `") ;;
-"image rm ` + staging + `") ;;`,
-		"k3d": flakyK3dImportCase(t, state.Cluster, ""),
-	})
-	var stdout bytes.Buffer
-	r := newRunner(Options{Repository: state.Repository, Out: &stdout})
-	r.engine = "podman"
-
-	reference, err := r.importOpenShellImage(context.Background(), state, root, "gateway", source)
-	if err != nil {
-		t.Fatalf("%v\n%s", err, strings.Join(commands(), "\n"))
-	}
-	if reference != "localhost/openclaw-development/openshell-gateway@"+profileTestDigest {
-		t.Fatalf("unexpected runtime reference: %q", reference)
-	}
-	assertRetriedImport(t, commands(), filepath.Join(root, "gateway-image.tar"), state.Cluster, stdout.String())
 }
