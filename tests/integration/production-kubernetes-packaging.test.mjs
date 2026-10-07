@@ -1966,7 +1966,13 @@ test(
         },
       ],
     });
-    for (const cidr of ["0.0.0.0/0", "198.51.100.0/24", "api.openai.com", "999.1.1.1/32"]) {
+    for (const cidr of [
+      "0.0.0.0/0",
+      "198.51.100.0/24",
+      "api.openai.com",
+      "999.1.1.1/32",
+      "01.2.3.4/32",
+    ]) {
       await assert.rejects(
         render({ "api.modelDiscoveryCidrs[0]": cidr }),
         /api.modelDiscoveryCidrs/,
@@ -2711,7 +2717,11 @@ test(
       ["missing database egress list", { "database.cidrs": "" }],
       ["missing Kubernetes API egress list", { "cluster.cidrs": "" }],
       ["broad database egress", { "database.cidrs[0]": "0.0.0.0/0" }],
+      ["database egress that is not an IPv4 host", { "database.cidrs[0]": "999.1.2.3/32" }],
+      ["database egress with a leading-zero octet", { "database.cidrs[0]": "01.2.3.4/32" }],
       ["broad Kubernetes API egress", { "cluster.cidrs[0]": "10.43.0.0/16" }],
+      ["Kubernetes API egress that is not an IPv4 host", { "cluster.cidrs[0]": "256.0.0.1/32" }],
+      ["Kubernetes API egress with a leading-zero octet", { "cluster.cidrs[0]": "01.2.3.4/32" }],
       ["invalid control-plane node selector", { "controlPlane.nodeSelector": "control" }],
       ["false control-plane node selector", { "controlPlane.nodeSelector": false }],
       [
@@ -2729,6 +2739,14 @@ test(
       [
         "unrestricted ChatGPT provider egress",
         { ...chatgptValues, "backend.chatgpt.providerCidr": "0.0.0.0/0" },
+      ],
+      [
+        "ChatGPT provider host that is not an IPv4 address",
+        { ...chatgptValues, "backend.chatgpt.providerCidr": "999.1.2.3/32" },
+      ],
+      [
+        "ChatGPT provider host with a leading-zero octet",
+        { ...chatgptValues, "backend.chatgpt.providerCidr": "01.2.3.4/32" },
       ],
       [
         "ChatGPT Backend without an approved provider host",
