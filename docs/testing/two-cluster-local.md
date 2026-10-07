@@ -281,4 +281,6 @@ it keeps the old chart's defaults and drops the new `agentRuntimeLogs` value.
 Keep `agentRuntimeLogs.enabled` equal to the control-plane chart's value. The
 new chart only widens grants and DNS egress, so the old controller keeps
 working, and existing tenant RoleBindings to its roles receive the new rules.
-Then run the image upgrade command.
+Then run the image upgrade command. Its startup preflight checks these grants in
+each bound tenant namespace, as the API and worker identities, and refuses the
+upgrade before stopping anything when one is missing.
