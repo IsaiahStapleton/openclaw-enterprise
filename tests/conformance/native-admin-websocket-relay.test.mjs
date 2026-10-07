@@ -216,7 +216,9 @@ test(
     // The browser answers the gateway's close frame just after the relay has finished its side
     // of the gateway connection. The relay pipes that late frame into the ended gateway socket,
     // which fails with EPIPE before it closes. The gateway still closed cleanly, so the frames
-    // queued for the browser must not be dropped.
+    // queued for the browser must not be dropped. The 'pipe' listener sees the gateway socket
+    // before the relay pipes the browser into it, so the frame is pushed before that pipe ends;
+    // the EPIPE assertion fails if the frame ever stops reaching the gateway.
     let gatewayError;
     browser.socket.once("pipe", (gateway) => {
       gateway.once("error", (error) => {
