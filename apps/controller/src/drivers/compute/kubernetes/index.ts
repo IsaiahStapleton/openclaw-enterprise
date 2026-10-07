@@ -2706,6 +2706,7 @@ export class KubernetesComputeDriver implements ComputeDriver {
         auth.method !== "codex_pat" &&
         auth.method !== "oauth" &&
         auth.method !== "credential_source") ||
+      (auth.method === "codex_pat" && !codex) ||
       (embedded && auth.method !== "api_key")
     ) {
       throw new ConfigurationFailure(
