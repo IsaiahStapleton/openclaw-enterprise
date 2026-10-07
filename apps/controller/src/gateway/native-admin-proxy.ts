@@ -539,7 +539,9 @@ export function proxyNativeAdminWebSocket(options: {
 
   upstreamRequest.once("upgrade", (response, upgradedSocket, upstreamHead) => {
     upstreamSocket = upgradedSocket;
-    upgradedSocket.once("error", () => close("upstream_disconnect"));
+    // After the gateway's clean EOF, a late browser byte written to the ended socket fails it with
+    // EPIPE before it closes. The gateway still closed cleanly, so let the browser drain.
+    upgradedSocket.once("error", () => close("upstream_disconnect", upgradedSocket.readableEnded));
     upgradedSocket.once("close", () => close("upstream_disconnect", true));
     const headers = responseHeaders(response.headers, options.context, {
       enforceServiceWorkerCsp: false,
