@@ -1,7 +1,7 @@
 ---
 created: 2026-09-09
-updated: 2026-10-04
-last_updated_session: authoring-run/286855f7-c7cb-43b6-ba19-419a20192f76
+updated: 2026-10-05
+last_updated_session: authoring-run/cfd0ce95-b6e3-4088-a97b-d6d4c9ff400c
 ---
 
 # Compose development startup
@@ -38,8 +38,10 @@ graph TD
   D -- "Kubernetes" --> E["<b>Owned k3d stack</b><br/>PostgreSQL and OCE"]
   D -- "Compose" --> F["<b>Hybrid stack</b><br/>Compose OCC and k3d Compute"]
   C --> G["<b>Prove Installation</b><br/>Authenticated service key"]
-  F --> G
-  E --> G
+  F --> R["<b>Resolve Pod proxy source</b><br/>Bound bridge-route queries"]
+  E --> R
+  R -- "Validated cni0 source" --> G
+  R -- "Deadline or query failure" --> X["<b>Fail startup</b><br/>Skip Installation writing"]
   F -- "OpenShell" --> H["<b>Own Workspace</b><br/>OpenShell operator mode"]
   E -- "OpenShell" --> H
   G --> I["<b>Record cleanup</b><br/>Exact engine and resources"]
@@ -305,11 +307,21 @@ The lifecycle imports the runtime and OpenShell images under engine-recorded
 names, including Podman's `localhost/` tags and Docker Hub's familiar names. For
 an omitted tag, `internal/occdev/kubernetes.go:engineImageReference` matches
 `:latest` and rejects missing or ambiguous matches. It then resolves the
-in-cluster digest and writes Installation configuration selecting Kubernetes
-Compute, Configuration, and Secret Drivers with native IAM; without OpenShell,
+in-cluster digest. Before `writeInstallation`, `internal/occdev/up.go:Up` and
+`internal/occdev/openshell_k3d.go:upK3d` call
+`internal/occdev/status_proxy_k3d.go:developmentStatusProxySource`. Node inventory retains caller context outside polling.
+
+`internal/occdev/up.go:poll` bounds route queries to two minutes through `internal/occdev/command.go:command`
+(`exec.CommandContext`): deadline or caller cancellation stops blocked
+queries. Default routes keep polling. `developmentStatusProxyCidr` requires one IPv4 `cni0` source inside the canonical node Pod CIDR, excluding
+its network address; it returns `/32`. Errors return no source; both callers stop before Installation writing and
+follow existing cleanup.
+
+`internal/occdev/kubernetes.go:writeInstallation` then selects Kubernetes Compute,
+Configuration, and Secret Drivers with native IAM; without OpenShell,
 it adds both bundled Presets and the Codex Plugin Driver after the shared Codex
-sandbox check. Its runtime section sets the transport Secret prefix and gateway
-storage class that the current Compute Driver schema accepts, and memory limits
+sandbox check. Its runtime section sets the transport Secret prefix, gateway
+storage class, and memory limits
 of 3 GiB per gateway and 6 GiB per Harness.
 
 When Compose mode also selects OpenShell, startup installs the pinned Agent
@@ -370,6 +382,8 @@ external key if a later OpenShell readiness step fails.
 [keep this for the user to add notes. do not change between edits]
 
 ## Changelog
+
+- 2026-10-05 08:52: Documented bridge-route cancellation and node-inventory context. (authoring-run/cfd0ce95-b6e3-4088-a97b-d6d4c9ff400c - fa8c90b5b6eb3464fcf3af42a7297b5de7d65454)
 
 - 2026-10-04 01:12: Pointed the API startup step at the existing composition function. (authoring-run/286855f7-c7cb-43b6-ba19-419a20192f76 - 7a8a64046ac8ef3e7b5a4ed46b1d4cef9f1573f3)
 
