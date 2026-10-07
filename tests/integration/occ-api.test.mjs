@@ -2205,7 +2205,7 @@ test("Namespace IAM routes fail closed without policy management and roll back a
     ),
     [],
   );
-  // A ServicePrincipal is an access credential's identity: unaudited, it is not created.
+  // A ServicePrincipal whose create cannot be audited is rolled back.
   const principalAuditFailure = await rollback.request(
     "POST",
     `/namespaces/${rollbackNamespace.id}/iam/service-principals`,

@@ -1414,14 +1414,15 @@ test(
     );
 
     // Disabling the administrator's account after admission denies the write.
+    const setAdminDisabled = (disabled) =>
+      pool.query(
+        `UPDATE occ.human_authentication_accounts
+         SET disabled = $2, version = version + 1 WHERE user_id = $1`,
+        [admin.userId, disabled],
+      );
     pending = {
       matches: namespaceRead(admin.principalId),
-      run: () =>
-        pool.query(
-          `UPDATE occ.human_authentication_accounts
-           SET disabled = true, version = version + 1 WHERE user_id = $1`,
-          [admin.userId],
-        ),
+      run: () => setAdminDisabled(true),
     };
     const rolesBefore = await roleIds();
     await assert.rejects(
@@ -1430,12 +1431,6 @@ test(
     );
     assert.equal(pending, undefined, "the disable raced the admitted request");
     assert.deepEqual((await roleIds()).sort(), rolesBefore.sort());
-    const setAdminDisabled = (disabled) =>
-      pool.query(
-        `UPDATE occ.human_authentication_accounts
-         SET disabled = $2, version = version + 1 WHERE user_id = $1`,
-        [admin.userId, disabled],
-      );
     await setAdminDisabled(false);
 
     // ServicePrincipal creation is a policy write too: a disable after admission creates none.

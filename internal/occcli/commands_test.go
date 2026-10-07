@@ -461,9 +461,12 @@ func TestServiceKeyCreateWritesAPrivateKeyFileAndNeverPrintsTheKey(t *testing.T)
 
 func TestServiceKeyCreateLeavesNoKeyFileWhenItCannotSaveAKey(t *testing.T) {
 	requests := 0
+	var lastBody map[string]any
 	status, response := http.StatusForbidden, `{"error":{"code":"FORBIDDEN","message":"denied"}}`
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requests++
+		lastBody = nil
+		_ = json.UnmarshalRead(request.Body, &lastBody)
 		writer.Header().Set("content-type", "application/json")
 		writer.WriteHeader(status)
 		_, _ = writer.Write([]byte(response))
@@ -496,15 +499,15 @@ func TestServiceKeyCreateLeavesNoKeyFileWhenItCannotSaveAKey(t *testing.T) {
 		if err := run(refused.namespace, refused.flag); err == nil || !strings.Contains(err.Error(), refused.message) {
 			t.Fatalf("%s %s: error = %v", refused.namespace, refused.flag, err)
 		}
-		assertNoKeyFile(refused.flag)
+		assertNoKeyFile(refused.namespace + " " + refused.flag)
 	}
 	if requests != 0 {
 		t.Fatalf("refused arguments sent %d requests", requests)
 	}
 
-	// 365 days is accepted. The server refuses the issuance, so the empty file is removed.
-	if err := run(testNamespaceID, "--expires-in-days=365"); err == nil || requests != 1 {
-		t.Fatalf("refused issuance: error = %v after %d requests", err, requests)
+	// 365 days is accepted and sent. The server refuses the issuance, so the empty file is removed.
+	if err := run(testNamespaceID, "--expires-in-days=365"); err == nil || requests != 1 || lastBody["expiresIn"] != float64(365*24*60*60) {
+		t.Fatalf("refused issuance: error = %v after %d requests, last body %v", err, requests, lastBody)
 	}
 	assertNoKeyFile("a refused issuance")
 
