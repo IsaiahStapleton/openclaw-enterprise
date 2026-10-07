@@ -42,6 +42,7 @@ import type {
   SecretBindings,
   ServiceAccount,
   ServiceAccountCredential,
+  ServicePrincipal,
   Role,
   IAMPolicyReadRepository,
   IAMPolicyRepository,
@@ -807,6 +808,7 @@ interface PlatformSnapshot {
   readonly revisions: Map<string, readonly Readonly<AgentRevision>[]>;
   readonly roles: Map<string, Readonly<Role>>;
   readonly bindings: Map<string, Readonly<AccessBinding>>;
+  readonly servicePrincipals: Map<string, Readonly<ServicePrincipal>>;
   readonly repositorySessions: Map<string, Readonly<RepositorySessionAttempt>>;
   readonly repositoryBrokerReceipts: Map<string, Readonly<RepositoryBrokerReceipt>>;
   readonly audit: Readonly<AuditEvent>[];
@@ -885,6 +887,7 @@ function cloneSnapshot(snapshot: PlatformSnapshot): PlatformSnapshot {
     bindings: new Map(
       Array.from(snapshot.bindings, ([key, binding]) => [key, immutableCopy(binding)]),
     ),
+    servicePrincipals: new Map(snapshot.servicePrincipals),
     repositorySessions: new Map(
       Array.from(snapshot.repositorySessions, ([key, attempt]) => [key, immutableCopy(attempt)]),
     ),
@@ -2372,6 +2375,9 @@ function repositories(
     if (namespaceServicePrincipalExists(namespaceId, identityId)) {
       return true;
     }
+    if (snapshot.servicePrincipals.get(identityId)?.namespaceId === namespaceId) {
+      return true;
+    }
     const resolved = iamSubjects.resolve?.(identityId);
     if (resolved?.id === identityId && bindableIdentity(namespaceId, resolved)) {
       return true;
@@ -2503,6 +2509,46 @@ function repositories(
     },
     deleteAccessBinding: async (namespaceId, bindingId) =>
       snapshot.bindings.delete(iamPolicyKey(namespaceId, bindingId)),
+    listServicePrincipals: async (namespaceId) =>
+      Object.freeze(
+        Array.from(snapshot.servicePrincipals.values()).filter(
+          (servicePrincipal) => servicePrincipal.namespaceId === namespaceId,
+        ),
+      ),
+    getServicePrincipal: async (namespaceId, servicePrincipalId) => {
+      const found = snapshot.servicePrincipals.get(servicePrincipalId);
+      return found?.namespaceId === namespaceId ? found : undefined;
+    },
+    createServicePrincipal: async (servicePrincipal) => {
+      assertInitialized(snapshot);
+      const namespace = await namespaces.lockNamespace(servicePrincipal.namespaceId ?? "");
+      if (
+        namespace === undefined ||
+        (namespace.status !== "provisioning" && namespace.status !== "ready") ||
+        servicePrincipal.namespaceId !== namespace.id ||
+        servicePrincipal.agentId !== undefined
+      ) {
+        throw new ScopeViolationError(
+          "The ServicePrincipal must belong to an available Namespace.",
+        );
+      }
+      if (
+        snapshot.servicePrincipals.has(servicePrincipal.id) ||
+        iamSubjects.resolve?.(servicePrincipal.id) !== undefined ||
+        iamSubjects.identities.some((identity) => identity.id === servicePrincipal.id)
+      ) {
+        throw new ResourceConflictError(
+          "The server generated an existing ServicePrincipal identity.",
+        );
+      }
+      const saved = Object.freeze({
+        kind: "service_principal" as const,
+        id: servicePrincipal.id,
+        namespaceId: namespace.id,
+      });
+      snapshot.servicePrincipals.set(saved.id, saved);
+      return saved;
+    },
   };
 
   const repositorySessions = memoryRepositorySessions(
@@ -2720,6 +2766,7 @@ export class InMemoryPlatformState implements PlatformStateStore {
     revisions: new Map(),
     roles: new Map(),
     bindings: new Map(),
+    servicePrincipals: new Map(),
     repositorySessions: new Map(),
     repositoryBrokerReceipts: new Map(),
     audit: [],

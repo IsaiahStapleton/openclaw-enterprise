@@ -91,6 +91,7 @@ import type {
   ServiceAccount,
   ServiceAccountCredential,
   ServiceAccountDriver,
+  ServicePrincipal,
   HarnessAuthBinding,
   HarnessAuthSnapshot,
 } from "@openclaw-enterprise/contracts";
@@ -1588,6 +1589,65 @@ export class OpenClawController {
       );
     }
     return deleted;
+  }
+
+  async listIAMServicePrincipals(
+    principalId: string,
+    namespaceId: string,
+  ): Promise<readonly Readonly<ServicePrincipal>[]> {
+    const namespace = await this.admitIAMPolicyOperation(principalId, namespaceId);
+    const driver = this.iamPolicyDriver("listNamespaceServicePrincipals");
+    return this.read((state) =>
+      this.iamPolicyOperation(() =>
+        driver.listNamespaceServicePrincipals!({ policy: state.iamPolicy }, namespace.id),
+      ),
+    );
+  }
+
+  async getIAMServicePrincipal(
+    principalId: string,
+    namespaceId: string,
+    servicePrincipalId: string,
+  ): Promise<Readonly<ServicePrincipal>> {
+    if (!isNonEmptyString(servicePrincipalId)) {
+      throw new ScopeViolationError("The exact ServicePrincipal identity is missing.");
+    }
+    const namespace = await this.admitIAMPolicyOperation(principalId, namespaceId);
+    const driver = this.iamPolicyDriver("getNamespaceServicePrincipal");
+    const found = await this.read((state) =>
+      this.iamPolicyOperation(() =>
+        driver.getNamespaceServicePrincipal!(
+          { policy: state.iamPolicy },
+          namespace.id,
+          servicePrincipalId,
+        ),
+      ),
+    );
+    if (found === undefined) {
+      throw new ScopeViolationError("The ServicePrincipal does not belong to the exact Namespace.");
+    }
+    return found;
+  }
+
+  /**
+   * Creates a non-Agent ServicePrincipal fixed to one Namespace. It holds no grant until an
+   * AccessBinding names it, and its keys are issued through the service-key route.
+   */
+  async createIAMServicePrincipal(
+    principalId: string,
+    namespaceId: string,
+  ): Promise<Readonly<ServicePrincipal>> {
+    const namespace = await this.admitIAMPolicyOperation(principalId, namespaceId);
+    const driver = this.iamPolicyDriver("createNamespaceServicePrincipal");
+    return this.mutate(async (state) => {
+      await this.holdIAMPolicyAuthority(state, principalId, namespace.id);
+      return this.iamPolicyOperation(() =>
+        driver.createNamespaceServicePrincipal!(
+          { policy: state.iamPolicy },
+          { id: `spn_${crypto.randomUUID()}`, namespaceId: namespace.id },
+        ),
+      );
+    });
   }
 
   async listAgents(
