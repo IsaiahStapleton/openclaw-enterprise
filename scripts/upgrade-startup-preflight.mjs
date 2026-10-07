@@ -22,9 +22,7 @@ const componentVariable = "OCC_UPGRADE_PREFLIGHT_COMPONENT";
 // With the bundled Kubernetes Compute Driver it then runs that Driver's startup
 // preflight, which reads the Kubernetes version and Namespaces with the Pod's
 // service account; it refuses, for example, single-cluster split-layout storage.
-// On the two-cluster profile it also checks the component's tenant grants in the
-// execution cluster, which a separate openclaw-execution release owns; an image
-// without that check skips it. Other Compute Drivers keep the load-only check.
+// Other Compute Drivers keep the load-only check.
 const startupCheck = `
 let drivers;
 try {
@@ -43,6 +41,8 @@ try {
   );
   if (drivers?.computeDriver instanceof KubernetesComputeDriver) {
     await drivers.computeDriver.preflight();
+    // Two-cluster profile: the component's tenant grants in the execution cluster,
+    // which a separate openclaw-execution release owns. Older images skip it.
     if (typeof drivers.computeDriver.verifyExecutionTenantGrants === "function") {
       await drivers.computeDriver.verifyExecutionTenantGrants(
         process.env.${componentVariable},

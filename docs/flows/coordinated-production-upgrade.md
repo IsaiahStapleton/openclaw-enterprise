@@ -98,6 +98,10 @@ without the database. With the bundled Kubernetes Compute Driver it then runs
 `KubernetesComputeDriver.preflight` with the Pod's Kubernetes credentials (its
 service account in `inCluster` mode), as API and worker startup do; that check refuses, for example, single-cluster
 [split-layout Gateway storage](../reference/drivers/kubernetes-compute.md#existing-split-layout-installations).
+Each Pod then checks the stored Installation name from the helper's
+`occ installation get` with the image's `isName`, the check the controller
+applies after it reads the name from the database (`INSTALLATION_NAME_INVALID`);
+an image without the rule skips it.
 On the experimental two-cluster profile, each Pod also runs
 `KubernetesComputeDriver.verifyExecutionTenantGrants` for its component, which
 startup does not run. In each execution tenant Namespace where its identity holds
@@ -106,10 +110,6 @@ the release-era tenant grant, SelfSubjectAccessReviews ask for the newer
 Event reads with runtime logs; worker: Pod `patch`). A missing rule refuses the
 candidate and points to
 [upgrading the execution chart](../testing/two-cluster-local.md#upgrade-the-execution-chart).
-Each Pod then checks the stored Installation name from the helper's
-`occ installation get` with the image's `isName`, the check the controller
-applies after it reads the name from the database (`INSTALLATION_NAME_INVALID`);
-an image without the rule skips it.
 Because the chart's default-deny NetworkPolicy also selects these Pods, the
 helper first creates a temporary NetworkPolicy carrying the rendered
 `openclaw-enterprise-dependency-egress` (and execution-cluster API) egress rules.
