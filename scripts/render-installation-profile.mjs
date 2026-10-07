@@ -195,6 +195,24 @@ function asString(source, path, diagnostics, { pattern, validate, description } 
   return value;
 }
 
+// The API and the bootstrap Job accept only an absolute HTTP(S) origin (validHttpBaseURL).
+function httpOrigin(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return (
+    (url.protocol === "http:" || url.protocol === "https:") &&
+    url.username.length === 0 &&
+    url.password.length === 0 &&
+    url.pathname === "/" &&
+    url.search.length === 0 &&
+    url.hash.length === 0
+  );
+}
+
 function observabilityDestination(value) {
   let url;
   try {
@@ -338,11 +356,10 @@ function validateNativeAdminDomains(domain, sharedCookieDomain, authBaseUrl, dia
   try {
     baseUrl = new URL(authBaseUrl);
   } catch {
-    baseUrl = undefined;
+    // asString already reported it as not an absolute HTTP(S) origin.
+    return;
   }
-  if (baseUrl === undefined) {
-    diagnostics.errors.push("controlPlane.authBaseUrl must be an absolute URL.");
-  } else if (baseUrl.protocol !== "https:") {
+  if (baseUrl.protocol !== "https:") {
     diagnostics.errors.push("controlPlane.authBaseUrl must use HTTPS with native admin.");
   } else if (dnsHostname.test(lowerSharedCookieDomain)) {
     const host = baseUrl.hostname.replace(/\.$/, "");
@@ -787,7 +804,10 @@ function buildRendered(profile, parsed, diagnostics) {
     pattern: digestImage,
     description: "an immutable image reference with a SHA-256 digest",
   });
-  const authBaseUrl = asString(controlPlane, ["controlPlane", "authBaseUrl"], diagnostics);
+  const authBaseUrl = asString(controlPlane, ["controlPlane", "authBaseUrl"], diagnostics, {
+    validate: httpOrigin,
+    description: "an absolute HTTP(S) origin URL without a path, query, fragment, or user info",
+  });
   const externalSignIn =
     controlPlane.github !== undefined ||
     controlPlane.google !== undefined ||
