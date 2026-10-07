@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The stderr k3d v5.8.3 printed when it closed its stream into the node
@@ -56,8 +57,8 @@ func importCalls(t *testing.T, path string) []string {
 
 func TestImportArchiveDirectRetriesAClosedStream(t *testing.T) {
 	calls := fakeK3dImport(t, 2, k3dClosedStreamOutput)
-	var stderr bytes.Buffer
-	r := &runner{opts: Options{Out: &bytes.Buffer{}, Err: &stderr}, env: map[string]string{"PATH": os.Getenv("PATH")}}
+	var stdout, stderr bytes.Buffer
+	r := &runner{opts: Options{Out: &stdout, Err: &stderr}, env: map[string]string{"PATH": os.Getenv("PATH")}}
 
 	if err := r.importArchiveDirect(context.Background(), "/tmp/development-import.tar", "occ-dev-1"); err != nil {
 		t.Fatalf("a closed import stream was not retried: %v", err)
@@ -71,9 +72,11 @@ func TestImportArchiveDirectRetriesAClosedStream(t *testing.T) {
 			t.Fatalf("unexpected k3d call: %q", call)
 		}
 	}
-	if !strings.Contains(stderr.String(), "read/write on closed pipe") ||
-		!strings.Contains(stderr.String(), "retrying (attempt 3 of 3)") {
-		t.Fatalf("k3d output or the retry notice was hidden: %q", stderr.String())
+	if !strings.Contains(stderr.String(), "read/write on closed pipe") {
+		t.Fatalf("k3d output was hidden: %q", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "retrying (attempt 3 of 3)") {
+		t.Fatalf("the retry notice was hidden: %q", stdout.String())
 	}
 }
 
@@ -92,10 +95,16 @@ func TestImportArchiveDirectStopsAfterTheAttemptBound(t *testing.T) {
 
 func TestImportArchiveDirectDoesNotRetryOtherFailures(t *testing.T) {
 	for name, output := range map[string]string{
-		"missing archive":    "ERRO[0000] Failed to import image(s) into cluster 'occ-dev-1': open /tmp/development-import.tar: no such file or directory",
-		"ctr refused":        "ERRO[0000] failed to import images in node 'k3d-occ-dev-1-server-0': Exec process in node 'k3d-occ-dev-1-server-0' failed with exit code '1'",
-		"pipe without copy":  "ERRO[0000] something else: io: read/write on closed pipe",
-		"copy without close": "ERRO[0000] failed to copy read stream. no space left on device",
+		"missing archive": "ERRO[0000] Failed to import image(s) into cluster 'occ-dev-1': open /tmp/development-import.tar: no such file or directory",
+		"ctr refused":     "ERRO[0000] failed to import images in node 'k3d-occ-dev-1-server-0': Exec process in node 'k3d-occ-dev-1-server-0' failed with exit code '1'",
+		// ctr failed mid-stream: the node closed the stream, so the copy hit a
+		// broken pipe rather than k3d's own closed connection.
+		"node closed the stream": `ERRO[0003] Failed to copy read stream. write unix @->/run/docker.sock: write: broken pipe
+ERRO[0003] Failed to import image(s) into cluster 'occ-dev-1': could not load image to cluster from stream /tmp/development-import.tar: error loading image to cluster, first error: failed to copy read stream. io: read/write on closed pipe`,
+		"closed pipe without copy": `ERRO[0000] something else: write unix @->/run/docker.sock: use of closed network connection
+ERRO[0000] something else: io: read/write on closed pipe`,
+		"copy without closed pipe": `ERRO[0000] Failed to copy read stream. write unix @->/run/docker.sock: use of closed network connection
+ERRO[0000] Failed to import image(s) into cluster 'occ-dev-1': error loading image to cluster, first error: failed to copy read stream. read /tmp/development-import.tar: input/output error`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			calls := fakeK3dImport(t, 9, output)
@@ -112,15 +121,44 @@ func TestImportArchiveDirectDoesNotRetryOtherFailures(t *testing.T) {
 }
 
 func TestImportArchiveDirectDoesNotRetryACanceledContext(t *testing.T) {
-	calls := fakeK3dImport(t, 9, k3dClosedStreamOutput)
+	// The import is canceled while k3d runs, after it printed the closed-stream
+	// error: the canceled import must fail without announcing a retry.
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "failure-output"), []byte(k3dClosedStreamOutput+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	body := `#!/bin/sh
+directory=$(dirname "$0")
+echo "$*" >> "$directory/calls"
+cat "$directory/failure-output" >&2
+exec sleep 30
+`
+	if err := os.WriteFile(filepath.Join(directory, "k3d"), []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	r := &runner{opts: Options{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}, env: map[string]string{"PATH": os.Getenv("PATH")}}
+	defer cancel()
+	go func() {
+		for {
+			if data, err := os.ReadFile(filepath.Join(directory, "calls")); err == nil && len(data) > 0 {
+				time.Sleep(200 * time.Millisecond)
+				cancel()
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+	var stdout bytes.Buffer
+	r := &runner{opts: Options{Out: &stdout, Err: &bytes.Buffer{}}, env: map[string]string{"PATH": os.Getenv("PATH")}}
 
 	if err := r.importArchiveDirect(ctx, "/tmp/development-import.tar", "occ-dev-1"); err == nil {
 		t.Fatal("a canceled import was reported as success")
 	}
-	if got := importCalls(t, calls); len(got) > 1 {
+	if strings.Contains(stdout.String(), "retrying") {
+		t.Fatalf("a canceled import announced a retry: %q", stdout.String())
+	}
+	if got := importCalls(t, filepath.Join(directory, "calls")); len(got) != 1 {
 		t.Fatalf("a canceled import was retried: %d imports", len(got))
 	}
 }
