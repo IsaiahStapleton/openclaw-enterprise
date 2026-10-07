@@ -1,8 +1,7 @@
 // Runtime image startup smoke tests split from runtime-image-startup.test.mjs so
 // CI can run the files in parallel lanes: startup model probes, SIGTERM during
-// startup, and the inactive Slack approver startup check (it moved here to
-// balance the two runtime image startup lanes). Native worker enrollment and
-// reconnect are in runtime-image-native-worker.test.mjs.
+// startup, and the inactive Slack approver startup check. Native worker
+// enrollment and reconnect are in runtime-image-native-worker.test.mjs.
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
