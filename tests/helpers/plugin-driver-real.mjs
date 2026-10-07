@@ -508,7 +508,7 @@ const sessionEvidenceScript = String.raw`
     // Repeated calls share a session; an earlier allowed result cannot prove this turn.
     const start = allRows.findLastIndex((row) => {
       const event = JSON.parse(row.event_json);
-      return event.type === "message" && event.message?.role === "user" && contains(event.message, marker);
+      return event?.type === "message" && event.message?.role === "user" && contains(event.message, marker);
     });
     const rows = start < 0 ? [] : allRows.slice(start);
     const messages = [];
@@ -549,8 +549,9 @@ const sessionEvidenceScript = String.raw`
     }
     for (const row of rows) {
       const event = JSON.parse(row.event_json);
-      eventTypeCounts[event.type ?? "unknown"] = (eventTypeCounts[event.type ?? "unknown"] ?? 0) + 1;
-      if (event.type !== "message") continue;
+      // Non-message rows, including null payloads, cannot establish tool or turn evidence.
+      eventTypeCounts[event?.type ?? "unknown"] = (eventTypeCounts[event?.type ?? "unknown"] ?? 0) + 1;
+      if (event?.type !== "message") continue;
       const message = event.message;
       const hasMarker = contains(message, marker);
       const mirrorIdentity = message?.__openclaw?.mirrorIdentity;
