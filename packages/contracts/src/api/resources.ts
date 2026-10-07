@@ -591,6 +591,18 @@ export const IAMAccessBindingSchema = Type.Union([
   ),
 ]);
 
+export const IAMServicePrincipalSchema = Type.Object(
+  {
+    id: Type.String({ minLength: 1, maxLength: 200 }),
+    namespaceId: NamespaceId,
+  },
+  {
+    additionalProperties: false,
+    description:
+      "A non-Agent automation identity fixed to one Namespace. It holds only the grants of AccessBindings that name it.",
+  },
+);
+
 export const ServiceAccountSchema = Type.Object(
   {
     id: ServiceAccountId,
@@ -802,6 +814,16 @@ export const IAMRoleListResponse = Type.Object(
 
 export const IAMAccessBindingResponse = Type.Object(
   { data: IAMAccessBindingSchema, meta: Meta },
+  { additionalProperties: false },
+);
+
+export const IAMServicePrincipalResponse = Type.Object(
+  { data: IAMServicePrincipalSchema, meta: Meta },
+  { additionalProperties: false },
+);
+
+export const IAMServicePrincipalListResponse = Type.Object(
+  { data: Type.Array(IAMServicePrincipalSchema), meta: Meta },
   { additionalProperties: false },
 );
 
@@ -1399,6 +1421,10 @@ export type IAMRoleResponse = Type.Static<typeof IAMRoleResponse>;
 export type IAMRoleListResponse = Type.Static<typeof IAMRoleListResponse>;
 export type IAMAccessBindingResponse = Type.Static<typeof IAMAccessBindingResponse>;
 export type IAMAccessBindingListResponse = Type.Static<typeof IAMAccessBindingListResponse>;
+export type IAMServicePrincipalResponse = Type.Static<typeof IAMServicePrincipalResponse>;
+export type IAMServicePrincipalListResponse = Type.Static<
+  typeof IAMServicePrincipalListResponse
+>;
 export type AgentListResponse = Type.Static<typeof AgentListResponse>;
 export type BackendListResponse = Type.Static<typeof BackendListResponse>;
 export type AgentProvisioningResponse = Type.Static<typeof AgentProvisioningResponse>;

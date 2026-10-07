@@ -112,6 +112,23 @@ func (app *application) printIAMAccessBinding(value any, collection bool) error 
 	})
 }
 
+func (app *application) printIAMServicePrincipal(value any, collection bool) error {
+	return app.printItems(value, collection, []column{
+		{title: "ID", key: "id"},
+		{title: "NAMESPACE", key: "namespaceId"},
+	})
+}
+
+func (app *application) printServiceKey(value any) error {
+	return app.printItems(value, false, []column{
+		{title: "ID", key: "id"},
+		{title: "SERVICE PRINCIPAL", key: "servicePrincipalId"},
+		{title: "NAMESPACE", key: "namespaceId"},
+		{title: "NAME", key: "name"},
+		{title: "EXPIRES", key: "expiresAt"},
+	})
+}
+
 func (app *application) printAgent(value any, collection bool) error {
 	return app.printItems(value, collection, []column{
 		{title: "ID", key: "id"},
