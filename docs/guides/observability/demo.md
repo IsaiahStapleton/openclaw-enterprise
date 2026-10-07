@@ -344,7 +344,10 @@ forwarding. Keep forwarding running. Sign in at `http://127.0.0.1:3001` as `admi
 the generated password. Open **OCC → OCC observability** for metrics and logs.
 For a console link, set `observability.url` to its `/d/occ-observability` URL in
 the [Installation startup YAML](../../reference/configuration.md#installation-startup-configuration),
-not the Helm values, and restart the API ([console link](../observability.md)).
+not `occ-demo.yaml` (profile installs set `controlPlane.observabilityUrl`). Apply it
+as a separate change with
+[Apply other Installation changes](../deploy/production-upgrade.md#apply-other-installation-changes);
+the new checksum restarts the API and worker.
 
 ## Verify actual data
 
