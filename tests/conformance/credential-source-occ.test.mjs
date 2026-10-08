@@ -1497,6 +1497,66 @@ test("binding without a Credential Gateway is a 409 after operate, whether or no
   }
 });
 
+test("deploying credential sources without a Sandbox Driver is a 409 naming the driver, after agent:deploy", async () => {
+  const { controller, dedicatedAgent, iamState, makeReady, namespace } = await fixture({
+    withoutSandbox: true,
+  });
+  await makeReady();
+  const source = await controller.createCredentialSource(administrator, {
+    namespaceId: namespace.id,
+    name: "registry",
+    type: "registry",
+    config: { host: "registry.example.com" },
+    secrets: {},
+  });
+  const agent = await dedicatedAgent();
+  await controller.updateAgent(administrator, {
+    namespaceId: namespace.id,
+    agentId: agent.id,
+    configurationId: agent.configurationId,
+    harnessAuth: { method: "runtime" },
+    credentialSources: [{ sourceId: source.id }],
+  });
+  const deploy = (principalId) =>
+    controller.deployAgent(
+      principalId,
+      { namespaceId: namespace.id, agentId: agent.id },
+      resolveApprovedDevelopmentHarness,
+    );
+  const outcome = async (principalId) => {
+    const error = await deploy(principalId).then(
+      () => assert.fail("deploying credential sources without a Sandbox Driver succeeded"),
+      (rejection) => rejection,
+    );
+    const { status, code, message } = requestFailure(error);
+    return { status, code, message };
+  };
+  const refusal = {
+    status: 409,
+    code: "RESOURCE_CONFLICT",
+    message: "Agent credential sources require a selected Sandbox Driver.",
+  };
+  assert.deepEqual(await outcome(administrator), refusal);
+  // Like the other capability refusals on deploy, the missing driver is an Installation
+  // property that precedes source grants: a deployer without operate on the source gets the
+  // same answer. A caller without agent:deploy still gets 403 before any of it.
+  iamState.restrictions.push({
+    id: "deny-source-operate",
+    namespaceId: namespace.id,
+    action: "operate",
+    resourceKind: "credential_source",
+    resourceId: source.id,
+    effect: "deny",
+  });
+  assert.deepEqual(await outcome(administrator), refusal);
+  iamState.restrictions.pop();
+  const denied = await outcome(editor);
+  assert.deepEqual(
+    { status: denied.status, code: denied.code },
+    { status: 403, code: "FORBIDDEN" },
+  );
+});
+
 test("Namespace IAM delegates operate on an exact credential source to an Agent principal", async () => {
   const { controller, dedicatedAgent, makeReady, modelSecret, namespace } = await fixture();
   await makeReady();
