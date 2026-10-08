@@ -2346,7 +2346,144 @@ async function verifyCredentialSourceContract(
       toolRevision.id,
     );
     assert.equal(await tokenReferences(transaction), false);
+    // Queued work for a revision that froze the source will attach it.
+    await transaction.operations.append({
+      kind: "agent_revision",
+      action: "reconcile",
+      namespaceId: sourceNamespace.id,
+      resourceId: toolRevision.id,
+      actorId: "principal-platform-state-contract",
+    });
+    assert.equal(await tokenReferences(transaction), true);
   });
+
+  // The store keeps a draft's list exact: every entry names a source in the Agent's Namespace,
+  // and a credential-source Harness binding names a listed one.
+  const secondToken = {
+    ...tokenSource,
+    id: identifier("cs"),
+    name: "Second token " + randomUUID(),
+  };
+  const missingSourceId = identifier("cs");
+  const listedAgent = {
+    ...toolAgent,
+    id: identifier("agt"),
+    name: "Credential source listed agent " + randomUUID(),
+    servicePrincipalId: identifier("service-agent"),
+  };
+  await store.transact((transaction) =>
+    transaction.credentialSources.createCredentialSource(secondToken),
+  );
+  for (const [agent, why] of [
+    [
+      { ...listedAgent, credentialSources: [{ sourceId: missingSourceId }] },
+      "A draft cannot list a missing source.",
+    ],
+    [
+      {
+        ...listedAgent,
+        harnessAuth: sourceBinding,
+        credentialSources: [{ sourceId: tokenSource.id }],
+      },
+      "A draft's Harness source must be listed.",
+    ],
+  ]) {
+    await assert.rejects(
+      store.transact((transaction) => transaction.agents.createAgent(agent)),
+      { name: "ScopeViolationError" },
+      why,
+    );
+  }
+  const updateList = (credentialSources, harnessAuth) =>
+    store.transact((transaction) =>
+      transaction.agents.updateConfiguration(
+        sourceNamespace.id,
+        listedAgent.id,
+        sourceConfiguration.id,
+        undefined,
+        harnessAuth,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        credentialSources,
+      ),
+    );
+  await store.transact((transaction) => transaction.agents.createAgent(listedAgent));
+  await assert.rejects(
+    updateList([{ sourceId: missingSourceId }]),
+    { name: "ScopeViolationError" },
+    "An update cannot list a missing source.",
+  );
+  // An update that leaves the list out keeps it.
+  assert.deepEqual((await updateList(undefined, { method: "runtime" })).credentialSources, [
+    { sourceId: tokenSource.id },
+  ]);
+  assert.deepEqual(
+    (await updateList([{ sourceId: secondToken.id }, { sourceId: tokenSource.id }]))
+      .credentialSources,
+    [{ sourceId: secondToken.id }, { sourceId: tokenSource.id }],
+  );
+
+  // A revision freezes exactly the draft's list, in order, as well-formed snapshots.
+  const snapshot = (sourceId) => ({
+    sourceId,
+    credentialGatewayId: "openshell-contract",
+    sourceType: tokenSource.type,
+  });
+  const listedRevision = {
+    ...toolRevision,
+    id: identifier("rev"),
+    agentId: listedAgent.id,
+    servicePrincipalId: listedAgent.servicePrincipalId,
+    credentialSources: [snapshot(secondToken.id), snapshot(tokenSource.id)],
+  };
+  for (const [credentialSources, why] of [
+    [[snapshot(tokenSource.id), snapshot(secondToken.id)], "out of order"],
+    [[...listedRevision.credentialSources, snapshot(missingSourceId)], "with an extra source"],
+    [
+      [{ ...snapshot(secondToken.id), driverId: "elsewhere" }, snapshot(tokenSource.id)],
+      "with an extra field",
+    ],
+    [
+      [{ ...snapshot(secondToken.id), credentialGatewayId: "" }, snapshot(tokenSource.id)],
+      "without a gateway",
+    ],
+  ]) {
+    await assert.rejects(
+      store.transact((transaction) =>
+        transaction.revisions.createRevision({ ...listedRevision, credentialSources }),
+      ),
+      { name: "ScopeViolationError" },
+      `A revision cannot freeze the draft's sources ${why}.`,
+    );
+  }
+  await store.transact(async (transaction) => {
+    assert.deepEqual(await transaction.revisions.createRevision(listedRevision), listedRevision);
+  });
+  // A draft without sources freezes none: an empty snapshot list is not a valid form of that.
+  const unlistedAgent = {
+    ...listedAgent,
+    id: identifier("agt"),
+    name: "Credential source unlisted agent " + randomUUID(),
+    credentialSources: undefined,
+    servicePrincipalId: identifier("service-agent"),
+  };
+  await store.transact((transaction) => transaction.agents.createAgent(unlistedAgent));
+  await assert.rejects(
+    store.transact((transaction) =>
+      transaction.revisions.createRevision({
+        ...listedRevision,
+        id: identifier("rev"),
+        agentId: unlistedAgent.id,
+        servicePrincipalId: unlistedAgent.servicePrincipalId,
+        credentialSources: [],
+      }),
+    ),
+    { name: "ScopeViolationError" },
+    "A revision cannot freeze an empty source list.",
+  );
 
   // Deletion is two-phase: a deleting source stays recorded and blocks Namespace
   // teardown, but new bindings refuse it.

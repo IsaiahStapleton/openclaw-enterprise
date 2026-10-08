@@ -135,6 +135,7 @@ import {
 } from "./driver-contract.ts";
 import {
   AGENT_NAME_CONFLICT,
+  AgentCredentialSourceBindingError,
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
@@ -252,6 +253,7 @@ export type { RemovedAccessBinding } from "./iam-policy-cleanup.ts";
 export {
   ActivationFailedError,
   ActivationPendingError,
+  AgentCredentialSourceBindingError,
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
@@ -3793,9 +3795,7 @@ export class OpenClawController {
       });
       const locked = await this.lockNamespace(state, input.namespaceId);
       // An Installation property, so it is reported before any Namespace state.
-      if (!this.selections.has("credential_gateway")) {
-        throw new CredentialGatewayNotConfiguredError();
-      }
+      this.assertCredentialGatewaySelected();
       if (locked.status !== "ready") {
         throw new NamespaceNotReadyError();
       }
@@ -7061,6 +7061,7 @@ export class OpenClawController {
         namespaceId,
         id: binding.sourceId,
       });
+      this.assertCredentialGatewaySelected();
       const source = await state.credentialSources.lockCredentialSource(
         namespaceId,
         binding.sourceId,
@@ -7121,13 +7122,25 @@ export class OpenClawController {
       harnessAuth?.method === "credential_source" &&
       !bindings.some(({ sourceId }) => sourceId === harnessAuth.sourceId)
     ) {
-      throw new ScopeViolationError(
-        "The Harness credential source must be listed in the Agent's credentialSources.",
-      );
+      throw new AgentCredentialSourceBindingError();
     }
   }
 
-  /** Namespace lock serializes binding, source deletion, and admission. */
+  /**
+   * An Installation property, so it is reported before any source lookup: whether a source
+   * exists never changes the answer. Callers run it after the caller's `operate` check on the
+   * exact source, so a caller without that grant still gets 403 first.
+   */
+  private assertCredentialGatewaySelected(): void {
+    if (!this.selections.has("credential_gateway")) {
+      throw new CredentialGatewayNotConfiguredError();
+    }
+  }
+
+  /**
+   * Namespace lock serializes binding, source deletion, and admission. The listing rule is
+   * checked after every source authorization and lookup, so it never answers before a 403.
+   */
   private async authorizeAgentCredentialSources(
     state: PlatformUnitOfWork,
     principalId: string,
@@ -7135,13 +7148,13 @@ export class OpenClawController {
     bindings: readonly AgentCredentialSourceBinding[],
     harnessAuth: HarnessAuthBinding | null | undefined,
   ): Promise<void> {
-    this.assertHarnessSourceListed(bindings, harnessAuth);
     for (const { sourceId } of bindings) {
       await this.authorize(principalId, "operate", {
         kind: "credential_source",
         namespaceId,
         id: sourceId,
       });
+      this.assertCredentialGatewaySelected();
       const source = await state.credentialSources.lockCredentialSource(namespaceId, sourceId);
       if (source === undefined || source.state !== "ready") {
         throw new ScopeViolationError(
@@ -7150,6 +7163,7 @@ export class OpenClawController {
       }
       this.credentialGatewayDriver(source.driverId);
     }
+    this.assertHarnessSourceListed(bindings, harnessAuth);
   }
 
   /**
