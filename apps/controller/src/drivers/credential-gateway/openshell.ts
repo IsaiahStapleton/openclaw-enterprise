@@ -186,11 +186,24 @@ const SOURCE_TYPES: readonly OpenShellSourceType[] = Object.freeze([
         },
       ],
       endpoints: [{ ...bearerTokenEndpoint(config), protocol: "rest" }],
-      binaries: options.toolBinaries ?? [],
+      binaries: requiredToolBinaries(options),
       inferenceCapable: false,
     }),
   },
 ]);
+
+/**
+ * OpenShell lets any binary use a profile with an empty binary list, so a bearer-token profile is
+ * never written without `toolBinaries`. Never reconcile existing profiles to an empty list.
+ */
+function requiredToolBinaries(options: OpenShellCredentialGatewayOptions): readonly string[] {
+  if (options.toolBinaries === undefined || options.toolBinaries.length === 0) {
+    throw new OpenShellCredentialGatewayFailure(
+      "OpenShell bearer-token profiles require configured toolBinaries.",
+    );
+  }
+  return options.toolBinaries;
+}
 
 function validateOptions(options: OpenShellCredentialGatewayOptions): void {
   const record = asRecord(options);
@@ -392,6 +405,7 @@ export class OpenShellCredentialGatewayDriver implements CredentialGatewayDriver
       );
     }
     // The profile follows the current configuration, so a narrowed binary list applies here.
+    // Narrow first: if the credential update then fails, the old token is only less reachable.
     await this.ensureProfile(
       client,
       workspace,

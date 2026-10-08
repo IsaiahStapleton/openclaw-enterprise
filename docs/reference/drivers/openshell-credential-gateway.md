@@ -58,13 +58,17 @@ to their endpoints, such as `/usr/bin/curl`. Without it the catalog omits
 `bearer-token`.
 
 Changing either list rewrites existing profiles lazily, not at startup. A
-source's profile changes on its next update or on the next deployment of a
-revision that binds it. OpenShell builds Sandbox policy from the stored profile,
-so a narrower list then applies to running Sandboxes too; until then a removed
-binary keeps access. To cut access at once, withdraw the source or delete it.
-Removing `toolBinaries` entirely blocks new registrations, updates, and
-deployments of existing `bearer-token` sources. Their providers and profiles
-stay until you withdraw or delete them; status and deletion keep working.
+source's profile changes on its next update or on the next deployment or repair
+of a revision that binds it; until that write succeeds, the deployment stays
+pending. OpenShell builds Sandbox policy from the stored profile, so a narrower
+list then applies to running Sandboxes within seconds. Until then a removed
+binary keeps access; to cut it at once, withdraw the source or delete it. During
+a controller rollout, replicas with different lists may rewrite a profile in
+turn; the last write wins. Removing `toolBinaries` entirely blocks
+registrations, updates, deployments, and repairs of `bearer-token` sources,
+because OpenShell treats an empty binary list as any binary. Existing providers
+and profiles stay until you withdraw or delete them; status and deletion keep
+working.
 
 Startup rejects the selection when:
 

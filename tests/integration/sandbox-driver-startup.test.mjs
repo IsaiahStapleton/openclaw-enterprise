@@ -1762,17 +1762,22 @@ function credentialGatewayOverProviders({ keepDeleted = false, toolBinaries } = 
   const deletedProfiles = [];
   const profileWrites = [];
   const calls = [];
+  let resourceVersion = 0;
   const client = {
     async getProviderProfile(_workspace, id) {
       return profiles.get(id);
     },
     async importProviderProfile(_workspace, profile) {
       profileWrites.push(["import", profile.id]);
-      profiles.set(profile.id, profile);
+      profiles.set(profile.id, { ...profile, resourceVersion: String(++resourceVersion) });
     },
-    async updateProviderProfile(_workspace, profile) {
+    // Like OpenShell, an update applies only over the version the writer last read.
+    async updateProviderProfile(_workspace, profile, expectedResourceVersion) {
       profileWrites.push(["update", profile.id]);
-      profiles.set(profile.id, profile);
+      if (profiles.get(profile.id)?.resourceVersion !== expectedResourceVersion) {
+        throw new Error("provider profile was modified concurrently");
+      }
+      profiles.set(profile.id, { ...profile, resourceVersion: String(++resourceVersion) });
     },
     async deleteProviderProfile(_workspace, id) {
       deletedProfiles.push(id);
@@ -2161,24 +2166,31 @@ test("an OpenShell profile write that lost a race to the same profile still atta
   const source = bearer("cs_00000000-0000-4000-8000-000000000111");
   await register(gateway.driver, source);
   const profileId = providerOf(source).type;
-  const write = client.updateProviderProfile;
+  const read = client.getProviderProfile;
   const narrowed = driverWith({ toolBinaries: ["/usr/bin/wget"] });
+  const other = driverWith({ toolBinaries: ["/usr/bin/curl", "/usr/bin/wget"] });
 
-  // Another deployment stored the same profile first; OpenShell refuses the stale version.
-  client.updateProviderProfile = async (workspace, profile) => {
-    await write(workspace, profile);
-    throw new Error("provider profile was modified concurrently");
+  // Another deployment with the same configuration writes between this read and write: the
+  // stale version is refused, and the stored profile is already the one this writer wanted.
+  client.getProviderProfile = async (workspace, id) => {
+    const stale = await read(workspace, id);
+    client.getProviderProfile = read;
+    await narrowed.attachForRevision(revisionContext([source]));
+    return stale;
   };
   assert.equal((await narrowed.attachForRevision(revisionContext([source]))).length, 1);
   assert.deepEqual(profiles.get(profileId).binaries, ["/usr/bin/wget"]);
 
-  // A writer that stored something else is not mistaken for success.
-  const other = driverWith({ toolBinaries: ["/usr/bin/curl"] });
-  client.updateProviderProfile = async () => {
-    throw new Error("provider profile was modified concurrently");
+  // A concurrent writer that stored another profile is not mistaken for success.
+  const curlOnly = driverWith({ toolBinaries: ["/usr/bin/curl"] });
+  client.getProviderProfile = async (workspace, id) => {
+    const stale = await read(workspace, id);
+    client.getProviderProfile = read;
+    await curlOnly.attachForRevision(revisionContext([source]));
+    return stale;
   };
   await assert.rejects(other.attachForRevision(revisionContext([source])), /modified concurrently/);
-  client.updateProviderProfile = write;
+  assert.deepEqual(profiles.get(profileId).binaries, ["/usr/bin/curl"]);
 });
 
 test("an OpenShell bearer-token source stays deletable after toolBinaries is removed", async () => {
