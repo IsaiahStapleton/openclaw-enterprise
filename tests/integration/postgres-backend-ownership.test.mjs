@@ -625,7 +625,8 @@ test(
   async (context) => {
     const fixture = await createBackendFixture(context);
     const controller = createBackendController(fixture, { nativeWorkerSupport: "custom-image" });
-    // Admission only: the queued plan never reaches a worker, so no runtime or Configuration effect runs.
+    // These stubs only pass the provisioning capability gates; Harness authentication admission
+    // (the code under test) stays real. No worker runs, so no runtime or Configuration effect may.
     Object.assign(controller.selectedDriver("compute"), {
       agentProvisioning: { executionModes: ["dedicated"] },
       requiresAgentRuntimeCredentials: true,
@@ -720,7 +721,7 @@ test(
       assert.equal(
         await pendingWork(namespace),
         0,
-        `${scenario.label} must not queue provisioning`,
+        `${scenario.label} must roll back its provisioning record`,
       );
       await fixture.cleanup(namespace);
     }

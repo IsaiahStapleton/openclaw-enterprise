@@ -409,7 +409,8 @@ test("execution tenant grant check reports an invalid Namespace list as incomple
   await assert.rejects(
     driver.verifyExecutionTenantGrants("api", { runtimeLogs: true }),
     (error) =>
-      error.constructor.name !== "ConfigurationFailure" &&
+      error.constructor === Error &&
+      error.cause?.message === "the Namespace list returned invalid data." &&
       error.message ===
         "The execution cluster tenant grant review failed: the Namespace list returned invalid data.",
   );

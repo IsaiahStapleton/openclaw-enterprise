@@ -4110,10 +4110,10 @@ test("Credentials blocks repeat saves after losing an authentication PATCH respo
     `/console/agents/${agent.id}?namespace=${namespace.id}&revision=draft&tab=credentials`,
   );
   // Issued ChatGPT service accounts are a Codex-only PAT source.
-  await page.getByLabel("Authentication source").waitFor();
+  await page.getByLabel("Authentication source", { exact: true }).waitFor();
   assert.deepEqual(
     await page
-      .getByLabel("Authentication source")
+      .getByLabel("Authentication source", { exact: true })
       .locator("option")
       .evaluateAll((options) => options.map((option) => option.value)),
     ["", "api_key", "runtime"],

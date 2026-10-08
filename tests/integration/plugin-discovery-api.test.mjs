@@ -628,8 +628,8 @@ test("Saved Agent plugin discovery rejects unsupported Harness authentication or
   );
   grantAgentSecret(fixture, embedded, secret);
   const embeddedPath = `/namespaces/${fixture.namespace.id}/agents/${embedded.id}/plugins`;
-  // A dedicated Codex Agent whose PAT comes from a managed ServiceAccount has no
-  // Service Accounts Secret for stored discovery to read.
+  // Stored discovery reads only a Secret-backed PAT today, so a dedicated Codex Agent whose
+  // PAT comes from a managed ServiceAccount is refused like the other unsupported sources.
   const account = await fixture.state.transact((unit) =>
     unit.serviceAccounts.createServiceAccount({
       id: `sa_${randomUUID()}`,

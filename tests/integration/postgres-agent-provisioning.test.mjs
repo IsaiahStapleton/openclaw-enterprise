@@ -2323,7 +2323,8 @@ test(
     });
     assert.equal(created.status, 201, JSON.stringify(created.body));
     const account = created.data;
-    // No worker runs: the stored plan stays queued and keeps referencing its Secrets.
+    // Admission needs a Backend-issued account, which this fixture cannot issue, so the plan is
+    // stored directly (as above). No worker runs: it stays queued and keeps referencing its Secrets.
     const actorId = await fixture.administratorPrincipalId();
     const body = provisioningBody(namespace.id, secrets);
     const workId = `agent-provisioning:${randomUUID().replaceAll("-", "")}`;

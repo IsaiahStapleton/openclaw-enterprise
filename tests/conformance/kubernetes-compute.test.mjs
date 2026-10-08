@@ -4485,6 +4485,10 @@ test("managed PAT preparation projects the account-owned token and rejects a cha
       },
     },
     { ...revision.harnessAuth, source: { ...revision.harnessAuth.source, id: otherAccountId } },
+    {
+      ...revision.harnessAuth,
+      backendBinding: { ...revision.harnessAuth.backendBinding, workspaceId: "ws_2" },
+    },
   ]) {
     await assert.rejects(
       driver.prepareRevision(revision, { ...context, harnessAuth }),
