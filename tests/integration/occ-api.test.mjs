@@ -3581,6 +3581,11 @@ test("native ServiceAccounts keep private credential references and cannot admit
   const nativeDeployment = await controller.request("POST", deploymentPath);
   assert.equal(nativeDeployment.status, 409);
   assert.equal(nativeDeployment.body.error.code, "RESOURCE_CONFLICT");
+  // A PAT source admits only an access-token credential, never an API key in its place.
+  assert.equal(
+    nativeDeployment.body.error.message,
+    "ChatGPT Harness authentication requires an issued account access-token credential.",
+  );
 
   // OAuth references are representable, but no refresh or OAuth execution exists yet.
   const oauthCredential = {
@@ -3594,6 +3599,10 @@ test("native ServiceAccounts keep private credential references and cannot admit
   const oauthDeployment = await controller.request("POST", deploymentPath);
   assert.equal(oauthDeployment.status, 409);
   assert.equal(oauthDeployment.body.error.code, "RESOURCE_CONFLICT");
+  assert.equal(
+    oauthDeployment.body.error.message,
+    "ChatGPT Harness authentication requires an issued account access-token credential.",
+  );
 
   const replacementCredential = {
     kind: "api_key",
