@@ -233,8 +233,22 @@ function catalogTypes(options: OpenShellCredentialGatewayOptions): readonly Open
   );
 }
 
+/** A type the current configuration offers: registration, update and attach need one. */
 function sourceType(type: string, options: OpenShellCredentialGatewayOptions): OpenShellSourceType {
-  const found = catalogTypes(options).find((entry) => entry.catalog.type === type);
+  return findSourceType(catalogTypes(options), type);
+}
+
+/**
+ * Any type this driver ever registered. Status and removal of an existing source must not
+ * depend on the current configuration: a source registered before `toolBinaries` was removed
+ * still has to be deletable.
+ */
+function knownSourceType(type: string): OpenShellSourceType {
+  return findSourceType(SOURCE_TYPES, type);
+}
+
+function findSourceType(types: readonly OpenShellSourceType[], type: string): OpenShellSourceType {
+  const found = types.find((entry) => entry.catalog.type === type);
   if (found === undefined) {
     throw new ScopeViolationError("The OpenShell Credential Gateway does not support this type.");
   }
@@ -357,7 +371,8 @@ export class OpenShellCredentialGatewayDriver implements CredentialGatewayDriver
 
   /**
    * Replaces the stored static values. OpenShell gives them only to processes started after
-   * the update, so a running Harness keeps its value until its next deployment.
+   * the update, so a running Harness keeps its value until its next deployment. Also rewrites
+   * the source's profile when the configured binaries changed since it was written.
    */
   async updateSource(
     context: CredentialSourceContext,
@@ -376,6 +391,15 @@ export class OpenShellCredentialGatewayDriver implements CredentialGatewayDriver
         "An OpenShell provider with this source's name is not owned by the source.",
       );
     }
+    // The profile follows the current configuration, so a narrowed binary list applies here.
+    await this.ensureProfile(
+      client,
+      workspace,
+      type,
+      context.source.id,
+      context.source.config,
+      context.signal,
+    );
     await client.updateProviderCredentials(
       workspace,
       name,
@@ -399,7 +423,7 @@ export class OpenShellCredentialGatewayDriver implements CredentialGatewayDriver
     if (provider === undefined) {
       return { state: "absent" };
     }
-    if (!ownedBy(provider, context.source.id, sourceType(context.source.type, this.options))) {
+    if (!ownedBy(provider, context.source.id, knownSourceType(context.source.type))) {
       return { state: "failed", reason: "The OpenShell provider is not owned by this source." };
     }
     return { state: "ready" };
@@ -409,7 +433,7 @@ export class OpenShellCredentialGatewayDriver implements CredentialGatewayDriver
     const workspace = openShellWorkspaceName(context.namespace);
     const name = openShellProviderName(context.source.id);
     const client = this.client(context);
-    const type = sourceType(context.source.type, this.options);
+    const type = knownSourceType(context.source.type);
     const existing = await client.getProvider(workspace, name, context.signal);
     if (existing !== undefined) {
       if (!ownedBy(existing, context.source.id, type)) {
@@ -460,6 +484,9 @@ export class OpenShellCredentialGatewayDriver implements CredentialGatewayDriver
           "The OpenShell provider for a bound credential source is unavailable.",
         );
       }
+      // Each deployment applies the current binary lists to the profiles it attaches. OpenShell
+      // composes Sandbox policy from the stored profile, so attached Sandboxes narrow too.
+      await this.ensureProfile(client, workspace, type, source.id, source.config, context.signal);
       attachments.push(Object.freeze({ sourceId: source.id, ref: name }));
     }
     return Object.freeze(attachments);
@@ -548,10 +575,24 @@ export class OpenShellCredentialGatewayDriver implements CredentialGatewayDriver
       annotations: { [PROFILE_DIGEST_ANNOTATION]: digest },
     };
     const existing = await client.getProviderProfile(workspace, base.id, signal);
-    if (existing === undefined) {
-      await client.importProviderProfile(workspace, profile, signal);
-    } else if (existing.annotations[PROFILE_DIGEST_ANNOTATION] !== digest) {
-      await client.updateProviderProfile(workspace, profile, existing.resourceVersion, signal);
+    if (existing?.annotations[PROFILE_DIGEST_ANNOTATION] === digest) {
+      return;
+    }
+    try {
+      if (existing === undefined) {
+        await client.importProviderProfile(workspace, profile, signal);
+      } else {
+        await client.updateProviderProfile(workspace, profile, existing.resourceVersion, signal);
+      }
+    } catch (error) {
+      // A concurrent writer with the same configuration (another deployment, or a replay)
+      // already stored this exact profile.
+      const current = await client
+        .getProviderProfile(workspace, base.id, signal)
+        .catch(() => undefined);
+      if (current?.annotations[PROFILE_DIGEST_ANNOTATION] !== digest) {
+        throw error;
+      }
     }
   }
 }
