@@ -3593,7 +3593,7 @@ revisionTest(
       [partialRevision.id, second],
       [partialRevision.id, second],
     ]);
-    // The failure explains only the unconfirmed source; the confirmed one keeps its reason.
+    // Both sources end revoked, each with the reason of the pass that confirmed it.
     assert.deepEqual(
       [await read(partial, first), await read(partial, second)].map(({ state, lastReason }) => ({
         state,
