@@ -863,9 +863,6 @@ export function createNativeAdminAccess(options: NativeAdminOptions) {
       socket.destroy();
     });
     const admission = await boundedNativeAdminAdmission(nativeAdminProxyContext(request, hostname));
-    if (socket.destroyed) {
-      return;
-    }
     if (!isNativeAdminProxyResolution(admission)) {
       try {
         await appendNativeAdminProxyDenialAudit(admission);
@@ -873,6 +870,9 @@ export function createNativeAdminAccess(options: NativeAdminOptions) {
         app.log.warn({ event: "native_admin.websocket_denial_audit_failed" });
       }
       socket.destroy();
+      return;
+    }
+    if (socket.destroyed) {
       return;
     }
     const context = await boundedNativeAdminAdmission(nativeAdminProxyTransportContext(admission));
