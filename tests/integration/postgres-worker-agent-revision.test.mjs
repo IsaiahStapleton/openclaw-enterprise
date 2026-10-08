@@ -3524,6 +3524,100 @@ revisionTest(
 );
 
 revisionTest(
+  "a withdrawal counts an absent credential as revoked, keeps confirmed revocations through a failure, and never withdraws through another Compute",
+  async (fixture) => {
+    const partial = await fixture.agent("withdraw-partial", {
+      auth: "credential_source",
+      nonModelSources: 2,
+    });
+    const moved = await fixture.agent("withdraw-moved", {
+      auth: "credential_source",
+      nonModelSources: 1,
+    });
+    const partialRevision = await fixture.revision(partial, 1);
+    const movedRevision = await fixture.revision(moved, 1);
+    const [first, second] = toolSources(partial).map(({ sourceId }) => sourceId);
+    const [movedSource] = toolSources(moved).map(({ sourceId }) => sourceId);
+    const withdrawn = [];
+    let failSecond = true;
+    const compute = {
+      ...fixture.compute,
+      async withdrawCredentialSource(revision, source) {
+        withdrawn.push([revision.id, source.id]);
+        if (source.id === second && failSecond) {
+          failSecond = false;
+          throw new Error("Sandbox unreachable");
+        }
+        // A Sandbox that no longer holds the credential reports it absent.
+        return { sourceId: source.id, state: source.id === first ? "absent" : "revoked" };
+      },
+    };
+    const options = { convergenceTimeoutMs: 50, transformDrivers: withCredentialGateway };
+    await fixture.start(compute, options);
+    await fixture.work(partialRevision, "succeeded");
+    await fixture.work(movedRevision, "succeeded");
+    await fixture.stop();
+
+    const withdraw = async (owner, revision, credentialSourceIds) => {
+      for (const credentialSourceId of credentialSourceIds) {
+        await fixture.controller.withdrawAgentCredentialSource(fixture.actor.id, {
+          namespaceId: fixture.namespace.id,
+          agentId: owner.id,
+          credentialSourceId,
+        });
+      }
+      const work = await fixture.observerPool.query(
+        `SELECT idempotency_key FROM occ.controller_work
+         WHERE revision_id = $1 AND agent_target = 'credentials_withdrawn'`,
+        [revision.id],
+      );
+      assert.equal(work.rowCount, 1);
+      return { id: revision.id, idempotencyKey: work.rows[0].idempotency_key };
+    };
+    const read = (owner, credentialSourceId) =>
+      fixture.controller.readAgentCredentialWithdrawal(fixture.actor.id, {
+        namespaceId: fixture.namespace.id,
+        agentId: owner.id,
+        credentialSourceId,
+      });
+
+    // The first source is revoked (reported absent) before the second one fails. The retry
+    // withdraws only the unconfirmed source and leaves the confirmed revocation alone.
+    const partialWork = await withdraw(partial, partialRevision, [first, second]);
+    await fixture.start(compute, options);
+    const completed = await fixture.work(partialWork, "succeeded", 30_000);
+    await fixture.stop();
+    assert.equal(completed.attempt_count, 2);
+    assert.deepEqual(withdrawn, [
+      [partialRevision.id, first],
+      [partialRevision.id, second],
+      [partialRevision.id, second],
+    ]);
+    // The failure explains only the unconfirmed source; the confirmed one keeps its reason.
+    assert.deepEqual(
+      [await read(partial, first), await read(partial, second)].map(({ state, lastReason }) => ({
+        state,
+        lastReason,
+      })),
+      [
+        { state: "revoked", lastReason: "CREDENTIALS_WITHDRAWN" },
+        { state: "revoked", lastReason: "CREDENTIALS_WITHDRAWN" },
+      ],
+    );
+
+    // A worker for another Compute never withdraws, or confirms, a revision it does not run.
+    const movedWork = await withdraw(moved, movedRevision, [movedSource]);
+    await fixture.start({ ...compute, id: `${fixture.compute.id}-other` }, options);
+    await fixture.work(movedWork, "failed_permanent", 30_000);
+    await fixture.stop();
+    assert.equal(withdrawn.length, 3);
+    const pending = await read(moved, movedSource);
+    assert.equal(pending.state, "pending");
+    assert.equal(pending.lastReason, "COMPUTE_DRIVER_MISMATCH");
+  },
+);
+
+revisionTest(
   "maintenance re-queues an exhausted non-model withdrawal and keeps repairing the revision",
   async (fixture) => {
     const owner = await fixture.agent("withdraw-tool-maintenance", {
