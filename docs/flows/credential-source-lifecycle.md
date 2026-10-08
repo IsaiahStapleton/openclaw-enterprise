@@ -121,7 +121,10 @@ again and returns `409`.
 `packages/occ/src/index.ts:authorizeHarnessAuthSource`
 
 Agent create and PATCH authorize the caller's `credential_source:operate` on the
-requested source and, for PATCH, on the current source. The source must be
+requested source and, for PATCH, on the current source. Then, before any lookup,
+an Installation without a Credential Gateway fails with
+`CredentialGatewayNotConfiguredError` (`409`), so the answer never depends on
+whether the source exists. The source must be
 `ready` in the exact Namespace and owned by the selected gateway. The generated
 `agents.harness_auth_credential_source_id` column references the source, so the
 database rejects deleting a source an Agent draft still uses.
@@ -129,7 +132,9 @@ database rejects deleting a source an Agent draft still uses.
 Every entry of `credentialSources` follows the same checks
 (`packages/occ/src/index.ts:authorizeAgentCredentialSources`), which also
 requires a credential-source `harnessAuth` to name a listed entry
-(`assertHarnessSourceListed`). The list is stored in
+(`assertHarnessSourceListed`, `AgentCredentialSourceBindingError`, `400`). That
+rule runs after every source check, so a caller without `operate` gets `403`
+first. The list is stored in
 `agents.credential_sources`; the constraint
 `agents_harness_credential_source_listed` enforces the same rule, and the trigger
 `agent_credential_sources_are_synchronized` mirrors the list into
@@ -316,6 +321,7 @@ attempt that exhausted its retries during a gateway outage resumes after it.
 
 ## Changelog
 
+- 2026-10-08 08:30: Agent binding reports a missing Credential Gateway as `409 CREDENTIAL_GATEWAY_NOT_CONFIGURED` and an unlisted Harness source as `400`, after the caller's `operate` checks. (fix-783-784)
 - 2026-10-07 18:00: Unified binding: one `credentialSources` list holds every source, and a credential-source `harnessAuth` names a listed entry. (claude-code/session_014fi7Uq1LyofgqwLrLoQ3yY - ee950468c)
 - 2026-10-07 12:07: Unify imported and managed PAT authentication while preserving source ownership and existing OAuth behavior. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - be5006e62)
 - 2026-10-06 21:30: Keep tool-withdrawal recovery scheduled after model revocation without preparing the revision again. (pr-851-rebase - bb6c7449b)

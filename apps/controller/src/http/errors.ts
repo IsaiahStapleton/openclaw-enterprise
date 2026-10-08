@@ -2,6 +2,7 @@ import type { FastifyError, FastifyReply } from "fastify";
 import { PresetValidationError } from "@openclaw-enterprise/contracts";
 import { UNTRUSTED_ORIGIN_MESSAGE } from "../admission/admission-verifier.ts";
 import {
+  AgentCredentialSourceBindingError,
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
@@ -650,6 +651,11 @@ export function requestFailure(error: unknown): RequestFailure {
     return failure(400, "INVALID_REQUEST", error.message, [{ path: "/value", code: error.code }]);
   }
   if (error instanceof ConfigurationHarnessError) {
+    return failure(400, "INVALID_REQUEST", error.message);
+  }
+  if (error instanceof AgentCredentialSourceBindingError) {
+    // Either field can break the rule (an update may drop the source from the list), so
+    // the message names it and no detail points at one field.
     return failure(400, "INVALID_REQUEST", error.message);
   }
   if (error instanceof SecretBindingValidationError) {
