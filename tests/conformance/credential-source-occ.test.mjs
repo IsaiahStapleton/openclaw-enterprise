@@ -1548,6 +1548,16 @@ test("deploying credential sources without a Sandbox Driver is a 409 naming the 
     resourceId: source.id,
     effect: "deny",
   });
+  // The restriction takes effect: binding the source is now denied.
+  await assert.rejects(
+    controller.updateAgent(administrator, {
+      namespaceId: namespace.id,
+      agentId: agent.id,
+      configurationId: agent.configurationId,
+      credentialSources: [{ sourceId: source.id }],
+    }),
+    AuthorizationDeniedError,
+  );
   assert.deepEqual(await outcome(administrator), refusal);
   iamState.restrictions.pop();
   const denied = await outcome(editor);

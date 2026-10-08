@@ -155,8 +155,8 @@ a dedicated Codex or native OpenClaw Harness, the paired Sandbox and gateway,
 and an `openai`/`api_key` type. Compute renders no model Secret for either
 Harness and passes the resolved source to Sandbox provisioning.
 `admitCredentialSources` refuses a list without a selected Sandbox Driver
-(`409` with its message), then authorizes the Agent principal's `operate` on
-every listed source, including the Harness source, checks each type against the
+(`409` with its message), rechecks the caller's binding grants, then authorizes
+the Agent principal's `operate` on every listed source, including the Harness source, checks each type against the
 catalog, and freezes `{ sourceId, credentialGatewayId, sourceType }` entries in
 the revision's `credential_sources`.
 

@@ -102,7 +102,9 @@ any source fails with `409 CREDENTIAL_GATEWAY_NOT_CONFIGURED`, as registration
 does, once the caller holds `operate` on it. Deploying an Agent that lists any
 source also needs a selected Sandbox Driver, because the paired Sandbox applies
 the sources; without one, deployment fails with `409 RESOURCE_CONFLICT` "Agent
-credential sources require a selected Sandbox Driver." See [Harness execution](harness-execution.md#harness-authentication)
+credential sources require a selected Sandbox Driver." (or, when `harnessAuth`
+names a source, "Credential-source Harness authentication requires a selected
+Sandbox Driver."). See [Harness execution](harness-execution.md#harness-authentication)
 for the supported topology.
 
 While a Credential Gateway is selected, deployment rejects `api_key` and
