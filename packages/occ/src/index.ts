@@ -5536,6 +5536,7 @@ export class OpenClawController {
       // able to drop sources the new gateway does not own. Only sources the update binds are
       // looked up, and deploy admission rechecks every listed source.
       if (previousAuth?.method === "credential_source") {
+        // Normally also listed; checked on its own in case a stored row predates the rule.
         await this.authorizeBoundCredentialSources(principalId, namespace.id, [
           { sourceId: previousAuth.sourceId },
         ]);

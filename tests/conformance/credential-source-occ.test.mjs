@@ -2021,9 +2021,14 @@ test("after a Credential Gateway change an Agent update can drop the old sources
     }),
     DependencyUnavailableError,
   );
+  await assert.rejects(
+    update(administrator, { harnessAuth: oldHarnessAuth }),
+    DependencyUnavailableError,
+  );
   assert.deepEqual(await stored(), before);
 
-  // Dropping a bound source still needs operate on it, and is denied before any lookup.
+  // Dropping a bound source still needs operate on it, and is denied before any lookup,
+  // including the lookup of a requested source that does not exist.
   iamState.restrictions.push({
     id: `deny-operate-${registry.id}`,
     namespaceId: namespace.id,
@@ -2033,7 +2038,12 @@ test("after a Credential Gateway change an Agent update can drop the old sources
     effect: "deny",
   });
   const drop = { harnessAuth: { method: "runtime" }, credentialSources: [] };
-  for (const fields of [{}, drop]) {
+  const missing = "cs_00000000-0000-4000-8000-00000000ffff";
+  const missingSource = {
+    harnessAuth: { method: "credential_source", sourceId: missing },
+    credentialSources: [{ sourceId: missing }],
+  };
+  for (const fields of [{}, drop, missingSource]) {
     await assert.rejects(update(administrator, fields), (error) => {
       assert.ok(error instanceof AuthorizationDeniedError);
       assert.deepEqual(error.authorization.resource, {
@@ -2052,6 +2062,17 @@ test("after a Credential Gateway change an Agent update can drop the old sources
   assert.deepEqual(
     (await update(administrator, { executionMode: "dedicated" })).credentialSources,
     [{ sourceId: model.id }, { sourceId: registry.id }],
+  );
+  // Leaving the list out keeps the old sources, which deploy admission still refuses.
+  const implicitlyKept = await update(administrator, { harnessAuth: { method: "runtime" } });
+  assert.deepEqual(implicitlyKept.credentialSources, before.credentialSources);
+  await assert.rejects(
+    controller.deployAgent(
+      administrator,
+      { namespaceId: namespace.id, agentId: agent.id },
+      resolveApprovedDevelopmentHarness,
+    ),
+    DependencyUnavailableError,
   );
   const dropped = await update(administrator, drop);
   assert.deepEqual(

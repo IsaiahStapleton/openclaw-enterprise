@@ -120,15 +120,14 @@ again and returns `409`.
 
 `packages/occ/src/index.ts:authorizeHarnessAuthSource`
 
-Agent create and PATCH authorize the caller's `credential_source:operate` on the
-requested source and, for PATCH, on the current source. Then, before any lookup,
-an Installation without a Credential Gateway fails with
+PATCH first authorizes the caller's `credential_source:operate` on each source
+the Agent already binds (`authorizeBoundCredentialSources`), without looking it
+up, so after a gateway change an update can still remove the old sources. Agent
+create and PATCH then authorize `operate` on each source the request binds.
+Then, before any lookup, an Installation without a Credential Gateway fails with
 `CredentialGatewayNotConfiguredError` (`409`), so the answer never depends on
-whether the source exists. The source must be
-`ready` in the exact Namespace and owned by the selected gateway. PATCH checks
-only `operate` on the sources the Agent already binds
-(`authorizeBoundCredentialSources`) and looks up only those the request lists,
-so after a gateway change an update can still remove the old sources. The generated
+whether the source exists. A source the request binds must be `ready` in the
+exact Namespace and owned by the selected gateway. The generated
 `agents.harness_auth_credential_source_id` column references the source, so the
 database rejects deleting a source an Agent draft still uses.
 
