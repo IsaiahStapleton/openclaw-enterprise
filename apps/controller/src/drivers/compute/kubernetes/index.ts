@@ -4062,9 +4062,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
       repositoryConsumer?.role !== "gateway"
         ? revision.configuration
         : repositoryNativeConfiguration(revision.configuration);
-    const admittedNativeConfiguration = this.gatewaySandboxConfiguration(
+    const admittedNativeConfiguration = this.gatewayNativeHookRelayConfiguration(
       revision,
-      this.kubernetesGatewayConfigurationDocument(nativeConfiguration),
+      this.gatewaySandboxConfiguration(
+        revision,
+        this.kubernetesGatewayConfigurationDocument(nativeConfiguration),
+      ),
     );
     const admittedRevision = { ...revision, configuration: admittedNativeConfiguration };
     const embedded = revision.harness.mode === "embedded";
@@ -4999,9 +5002,12 @@ export class KubernetesComputeDriver implements ComputeDriver {
       repositoryConsumer?.role !== "gateway"
         ? revision.configuration
         : repositoryNativeConfiguration(revision.configuration);
-    const admittedNativeConfiguration = this.gatewaySandboxConfiguration(
+    const admittedNativeConfiguration = this.gatewayNativeHookRelayConfiguration(
       revision,
-      this.kubernetesGatewayConfigurationDocument(nativeConfiguration),
+      this.gatewaySandboxConfiguration(
+        revision,
+        this.kubernetesGatewayConfigurationDocument(nativeConfiguration),
+      ),
     );
     const admittedRevision = { ...revision, configuration: admittedNativeConfiguration };
     if (this.options.runtime === undefined) {
@@ -9518,6 +9524,41 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
     return `https://${host}${port === 443 ? "" : `:${port}`}`;
   }
 
+  private gatewayNativeHookRelayConfiguration(
+    revision: AgentRevision,
+    configuration: OpenClawConfigurationDocument,
+  ): OpenClawConfigurationDocument {
+    if (revision.harness.mode !== "dedicated" || revision.harness.id !== "codex") {
+      return configuration;
+    }
+    const endpoint = this.getGatewayEndpoint(revision);
+    if (this.options.runtime === undefined || endpoint === undefined) {
+      return configuration;
+    }
+    const document = structuredClone(configuration) as Record<string, OpenClawConfigurationValue>;
+    let appServer = document;
+    for (const key of ["plugins", "entries", "codex", "config", "appServer"]) {
+      const value = appServer[key] ?? {};
+      if (asRecord(value) === undefined) {
+        throw new ConfigurationFailure(
+          "Dedicated Codex plugin configuration must contain objects.",
+        );
+      }
+      appServer[key] = value;
+      appServer = value as Record<string, OpenClawConfigurationValue>;
+    }
+    if (appServer.nativeHookRelay !== undefined) {
+      throw new ConfigurationFailure(
+        "Dedicated Codex native hook relay is owned by the Compute Driver.",
+      );
+    }
+    appServer.nativeHookRelay = {
+      url: `${endpoint.replace(/^wss:/, "https:")}/node/__openclaw__/native-hook`,
+      credentialDirectory: "/home/node/.oce-native-hooks",
+    };
+    return document;
+  }
+
   private gatewaySandboxConfiguration(
     revision: AgentRevision,
     configuration: OpenClawConfigurationDocument,
@@ -10051,6 +10092,34 @@ chmodSync(${JSON.stringify(nodeStatePath)}, 0o700);`;
                         ],
                         backendRefs: [this.gatewayRouteBackendRef(service)],
                       },
+                      ...(revision.harness.id === "codex"
+                        ? [
+                            {
+                              matches: [
+                                {
+                                  method: "POST",
+                                  path: {
+                                    type: "PathPrefix",
+                                    value: `${this.gatewayRoutePath(revision)}/node/__openclaw__/native-hook/`,
+                                  },
+                                },
+                              ],
+                              filters: [
+                                {
+                                  type: "URLRewrite",
+                                  urlRewrite: {
+                                    path: {
+                                      type: "ReplacePrefixMatch",
+                                      replacePrefixMatch: "/__openclaw__/native-hook/",
+                                    },
+                                  },
+                                },
+                                this.gatewayRouteHeaderFilter("node-transfer"),
+                              ],
+                              backendRefs: [this.gatewayRouteBackendRef(service)],
+                            },
+                          ]
+                        : []),
                       ...["worker-bundle/v1", "worker-transfer/v1"].map((transferPath) => ({
                         matches: [
                           {
