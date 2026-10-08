@@ -156,8 +156,9 @@ requires a selected Sandbox, and Compute `validateHarnessAuth` requires
 a dedicated Codex or native OpenClaw Harness, the paired Sandbox and gateway,
 and an `openai`/`api_key` type. Compute renders no model Secret for either
 Harness and passes the resolved source to Sandbox provisioning.
-`admitCredentialSources` then authorizes the Agent principal's `operate` on
-every listed source, including the Harness source, checks each type against the
+`admitCredentialSources` refuses a list without a selected Sandbox Driver
+(`409` with its message), rechecks the caller's binding grants, then authorizes
+the Agent principal's `operate` on every listed source, including the Harness source, checks each type against the
 catalog, and freezes `{ sourceId, credentialGatewayId, sourceType }` entries in
 the revision's `credential_sources`.
 
@@ -323,7 +324,8 @@ attempt that exhausted its retries during a gateway outage resumes after it.
 
 ## Changelog
 
-- 2026-10-08 09:00: Agent PATCH needs only `operate` on the sources it already binds, so an update can drop sources after the Credential Gateway changes. (fix-782)
+- 2026-10-08 09:30: Agent PATCH needs only `operate` on the sources it already binds, so an update can drop sources after the Credential Gateway changes. (fix-782)
+- 2026-10-08 09:00: Deploying listed sources without a Sandbox Driver returns `409` with its message, not the generic "already exists". (fix-786)
 - 2026-10-08 08:30: Agent binding reports a missing Credential Gateway as `409 CREDENTIAL_GATEWAY_NOT_CONFIGURED` and an unlisted Harness source as `400`, after the caller's `operate` checks. (fix-783-784)
 - 2026-10-07 18:00: Unified binding: one `credentialSources` list holds every source, and a credential-source `harnessAuth` names a listed entry. (claude-code/session_014fi7Uq1LyofgqwLrLoQ3yY - ee950468c)
 - 2026-10-07 12:07: Unify imported and managed PAT authentication while preserving source ownership and existing OAuth behavior. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - be5006e62)
