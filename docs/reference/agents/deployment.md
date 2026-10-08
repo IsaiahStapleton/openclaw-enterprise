@@ -34,7 +34,7 @@ authentication through the controller API remain deferred.
 
 An Agent may also reference one same-Namespace, OCC-owned
 [service account](../service-accounts.md) through
-`harnessAuth: { method: "chatgpt_service_account", serviceAccountId }`; setting
+`harnessAuth: { method: "codex_pat", source: { kind: "service_account", namespaceId, id: serviceAccountId } }`; setting
 `harnessAuth` to `null` clears it. This credential binding does not
 replace its ServicePrincipal or Kubernetes ServiceAccount.
 
@@ -64,7 +64,11 @@ An Agent update may include `executionMode`, `harnessAuth`, and `backendId`
 alongside its required `configurationId`. Omission preserves the current value;
 `harnessAuth: null` clears authentication and `backendId: null` clears the
 Backend. Existing revisions retain their immutable placement, auth binding, and
-Backend association.
+Backend association. For the current `harnessAuth` source, an update checks only
+the caller's grant (Secret or credential source `operate`, account `read`) and
+reads no record. After the Installation selects another Secret Driver or
+Credential Gateway, an update can still omit, clear, or replace the old binding;
+naming it again fails with `503`, and so does deploying with it.
 See the
 [Harness execution topology flow](../../flows/harness-execution-topology.md) for
 runtime selection, identity boundaries, and activation.
@@ -145,6 +149,10 @@ for example `The Agent service principal <id> is not authorized to operate
 secret <id>`. Its audit event records your own request with reason code
 `AGENT_PRINCIPAL_NOT_AUTHORIZED` and names that principal, action, resource and
 IAM evidence in its details. Denials of your own permissions stay generic.
+Admission then asks Compute to check the Configuration's gateway settings. On
+Kubernetes, a gateway setting it refuses answers `409 RESOURCE_CONFLICT` naming
+the setting and what is accepted, never its value, before any revision is created
+(see [gateway authentication](../drivers/kubernetes-compute/networking-and-isolation.md#gateway-authentication)).
 
 ### Pending deployment progress
 

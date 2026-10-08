@@ -88,30 +88,14 @@ test("generated API reference stays on the approved single page", async () => {
 
 test("every operation with a request body documents 413 and 415", async () => {
   // The controller answers an oversized body 413 and a non-JSON media type 415 on every
-  // route that reads a body; updateCredentialSource documented neither. The /api/auth/*
-  // operations below have the same gap and are fixed separately; shrink this list then.
-  const authOperationsWithoutBodyErrors = [
-    "createAuthAccount",
-    "disableAuthAccount",
-    "enableAuthAccount",
-    "detachAuthMethod",
-    "attachGitHubIdentity",
-    "attachGoogleIdentity",
-    "attachOidcIdentity",
-    "revokeAuthAccountSessions",
-    "confirmGitHubSignIn",
-    "confirmGoogleSignIn",
-    "confirmOidcSignIn",
-    "replaceAuthRecovery",
-    "createServiceKey",
-    "signInEmail",
-  ];
+  // route that reads a body; updateCredentialSource and the /api/auth/* operations
+  // documented neither.
   const document = JSON.parse(await readFile(contractPath, "utf8"));
   const missing = contractOperations(document)
     .filter((operation) => operation.requestBody !== undefined)
     .filter((operation) => !("413" in operation.responses && "415" in operation.responses))
     .map((operation) => operation.operationId);
-  assert.deepEqual(missing.sort(), authOperationsWithoutBodyErrors.sort());
+  assert.deepEqual(missing, []);
 });
 
 test("AccessBinding creation documents request body target read permissions", async () => {
@@ -179,6 +163,60 @@ test("Agent plugin and first deployment operations document conditional grants",
   }
 });
 
+test("credential source grants appear on the Agent and source operations that check them", async () => {
+  const document = JSON.parse(await readFile(contractPath, "utf8"));
+  const operations = new Map(
+    contractOperations(document).map((operation) => [operation.operationId, operation]),
+  );
+  const permissions = (operationId) => {
+    const operation = operations.get(operationId);
+    assert.ok(operation, `${operationId} OpenAPI operation is missing`);
+    return operation["x-openclaw-permissions"];
+  };
+  const sourceOperate = (scope) => ({
+    action: "operate",
+    resourceKind: "credential_source",
+    scope,
+    condition: "bound_credential_source",
+  });
+  // OCC authorizes the caller's operate on every listed or Harness source.
+  assert.ok(
+    permissions("createAgent").some((permission) =>
+      isDeepStrictEqual(permission, sourceOperate("request_body")),
+    ),
+  );
+  for (const operationId of ["updateAgent", "deployAgent"]) {
+    assert.ok(
+      permissions(operationId).some((permission) =>
+        isDeepStrictEqual(permission, sourceOperate("requested")),
+      ),
+      operationId,
+    );
+  }
+  // Guided provisioning refuses credential sources outright.
+  assert.ok(
+    !permissions("provisionAgent").some(
+      (permission) => permission.resourceKind === "credential_source",
+    ),
+  );
+  // Registration and update read each referenced Secret's value for the gateway.
+  assert.deepEqual(permissions("createCredentialSource"), [
+    { action: "create", resourceKind: "credential_source", scope: "namespace" },
+    { action: "operate", resourceKind: "secret", scope: "request_body", condition: "bound_secret" },
+  ]);
+  assert.deepEqual(permissions("updateCredentialSource"), [
+    { action: "update", resourceKind: "credential_source", scope: "requested" },
+    { action: "operate", resourceKind: "secret", scope: "requested", condition: "bound_secret" },
+  ]);
+
+  const page = generateApiReferenceOutputs(document)[0].content;
+  assert.match(page, /^\| `operate` \| `credential_source` \| `requested` \(when bound\) \|$/m);
+  assert.match(
+    page,
+    /Agent service principal to have operate permission on each bound Secret and on each CredentialSource the Agent lists\./,
+  );
+});
+
 test("OpenAPI check rejects unexpected generated API child pages in an isolated CLI fixture", async (t) => {
   const fixture = await mkdtemp(join(tmpdir(), "occ-api-reference-check-"));
   t.after(() => rm(fixture, { recursive: true, force: true }));
@@ -233,4 +271,30 @@ test("operations without a request body do not list 413 or 415", async () => {
     .filter((operation) => "413" in operation.responses || "415" in operation.responses)
     .map((operation) => operation.operationId);
   assert.deepEqual(listed, []);
+});
+
+test("every operation with a request body documents 400", async () => {
+  // Every body is validated against its operation's schema before the handler runs. Eleven
+  // /api/auth/* operations, whose schemas are inline rather than in the shared route
+  // contract, once omitted the 400 that validation answers.
+  const document = JSON.parse(await readFile(contractPath, "utf8"));
+  const missing = contractOperations(document)
+    .filter((operation) => operation.requestBody !== undefined)
+    .filter((operation) => !("400" in operation.responses))
+    .map((operation) => operation.operationId);
+  assert.deepEqual(missing, []);
+});
+
+test("the error envelope table documents the shared ErrorResponse, not an inline copy", async () => {
+  // Inline /api/auth/* error schemas also carry `details` so schema 400s keep their field
+  // pointers. The reference introduction must still describe the shared envelope's codes
+  // and limits, which those inline copies do not repeat.
+  const document = JSON.parse(await readFile(contractPath, "utf8"));
+  const page = generateApiReferenceOutputs(document)[0].content;
+  const section = page.slice(page.indexOf("## Error responses"), page.indexOf("## Resources"));
+  assert.match(section, /^\| `error\.code` \| `"INVALID_REQUEST" or /m);
+  assert.match(
+    section,
+    /^\| `error\.message` \| `string` \| Yes \| min length: 1; max length: 256 \|$/m,
+  );
 });

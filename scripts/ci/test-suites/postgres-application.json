@@ -3,6 +3,13 @@
     "postgres": true,
     "requiresPreparedStateForFile": true
   },
+  "fileConcurrency": 2,
+  "parallelFiles": [
+    "tests/integration/postgres-worker-agent-revision.test.mjs",
+    "tests/integration/postgres-native-iam-policy-barrier.test.mjs",
+    "tests/integration/auth-maintain.test.mjs",
+    "tests/integration/occ-metrics.test.mjs"
+  ],
   "files": [
     {
       "path": "tests/integration/occ-metrics.test.mjs",
@@ -58,6 +65,7 @@
       "path": "tests/integration/auth-maintain.test.mjs",
       "expectedTests": [
         "auth:maintain requires an explicit writers-stopped claim for every change",
+        "auth:maintain rejects undeclared commands before configuration",
         "stopped maintenance activates, repairs, resets, purges and returns to the legacy profile"
       ]
     }

@@ -44,6 +44,7 @@
     "tests/integration/repository-credentials-projected-inputs.test.mjs",
     "tests/integration/ci-image-pull.test.mjs",
     "tests/conformance/slack-proxy-tunnel.test.mjs",
+    "tests/conformance/native-admin-websocket-relay.test.mjs",
     "tests/integration/repository-runtime-materialization.test.mjs",
     "tests/conformance/repository-credentials-contracts.test.mjs",
     "tests/integration/plugin-driver-startup.test.mjs",
@@ -79,6 +80,7 @@
     "tests/conformance/plugin-runtime-templates.test.mjs",
     "tests/integration/ci-logging.test.mjs",
     "tests/conformance/slack-proxy-reset.test.mjs",
+    "tests/conformance/native-admin-upgrade-reset.test.mjs",
     "tests/conformance/repository-credentials-custody.test.mjs",
     "tests/conformance/repository-credentials-receive-pack.test.mjs",
     "tests/integration/runtime-assets.test.mjs",
@@ -95,13 +97,17 @@
   },
   "files": [
     {
+      "path": "tests/integration/qa-fixture-inputs.test.mjs"
+    },
+    {
       "path": "tests/integration/dev-codex-seccomp-failure.test.mjs"
     },
     {
       "path": "tests/integration/first-agent-startup.test.mjs",
       "expectedTests": [
         "first-Agent accepts current Compose-backed Kubernetes development state",
-        "first-Agent rejects OpenShell development state before external calls",
+        "first-Agent requires dedicated Codex for OpenShell before external calls",
+        "first-Agent admits dedicated Codex with OpenShell development state",
         "first-Agent runs psql through the k3d PostgreSQL StatefulSet"
       ]
     },
@@ -195,7 +201,13 @@
       "path": "tests/conformance/slack-proxy-reset.test.mjs"
     },
     {
+      "path": "tests/conformance/native-admin-upgrade-reset.test.mjs"
+    },
+    {
       "path": "tests/conformance/slack-proxy-tunnel.test.mjs"
+    },
+    {
+      "path": "tests/conformance/native-admin-websocket-relay.test.mjs"
     },
     {
       "path": "tests/conformance/hosted-plugin-discovery.test.mjs"
