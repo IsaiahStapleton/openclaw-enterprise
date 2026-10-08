@@ -3787,6 +3787,39 @@ test("native ServiceAccounts reject invalid references and enforce exact Namespa
     },
   );
   assert.equal(crossNamespaceAssociation.status, 404);
+  // A source naming another Namespace is refused as such, even when the route Namespace holds
+  // an account with that id: the reference itself must not cross Namespaces.
+  const foreignSourceAssociation = await controller.request(
+    "POST",
+    `/namespaces/${namespaceA.id}/agents`,
+    {
+      body: {
+        name: "foreign-source-agent",
+        configurationId: configurationA.id,
+        harnessAuth: {
+          method: "codex_pat",
+          source: { kind: "service_account", namespaceId: namespaceB.id, id: accountA.id },
+        },
+      },
+    },
+  );
+  assert.equal(foreignSourceAssociation.status, 404, JSON.stringify(foreignSourceAssociation.body));
+  // The API hides the reason; the controller names the Namespace boundary, not a later store check.
+  await assert.rejects(
+    controller.fixture.controller.createAgent(controller.fixture.principal.id, {
+      namespaceId: namespaceA.id,
+      name: "foreign-source-agent",
+      configurationId: configurationA.id,
+      harnessAuth: {
+        method: "codex_pat",
+        source: { kind: "service_account", namespaceId: namespaceB.id, id: accountA.id },
+      },
+    }),
+    {
+      name: "ScopeViolationError",
+      message: "Harness authentication sources cannot cross Namespaces.",
+    },
+  );
 
   // Namespace-wide Agent authority never substitutes for an exact ServiceAccount binding.
   controller.fixture.state.roles.push(
