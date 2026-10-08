@@ -850,6 +850,16 @@ for (const authMethod of ["api_key", "codex_pat"]) {
         },
       );
       assert.equal(admitted.status, 202, JSON.stringify(admitted.body));
+      // Until the worker runs, the queued plan is a consumer of its Harness Secret, whichever
+      // Secret-backed method it uses.
+      const pending = await fixture.request(
+        "GET",
+        `/namespaces/${namespace.id}/secrets/${secrets.modelKey.id}`,
+      );
+      assert.equal(pending.status, 200, JSON.stringify(pending.body));
+      assert.deepEqual(pending.data.consumers.provisioningRequests, [
+        admitted.data.provisioning.workId,
+      ]);
 
       await fixture.startWorker();
       const status = await waitFor("Agent provisioning to succeed", async () => {
