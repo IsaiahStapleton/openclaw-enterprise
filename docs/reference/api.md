@@ -4565,7 +4565,7 @@ Push current or replacement Secret values to the Credential Gateway copy
 
 **Operation ID:** `updateCredentialSource`
 
-**Permissions:** Requires update permission on the requested CredentialSource. Requires operate permission on each Secret the source references after the update, including current references the request does not replace.
+**Permissions:** Requires update permission on the requested CredentialSource. Requires operate permission on each Secret the source references after the update, including its current references when the request omits secrets.
 
 | Action | Resource | Scope |
 | --- | --- | --- |

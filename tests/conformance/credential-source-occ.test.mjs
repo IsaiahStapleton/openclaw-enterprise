@@ -1458,6 +1458,43 @@ test("binding without a Credential Gateway is a 409 after operate, whether or no
     (await controller.getAgent(administrator, namespace.id, agent.id)).credentialSources,
     undefined,
   );
+
+  // An Agent whose stored binding outlived the gateway: deploy and any update name the fix.
+  await controller.transact((unit) =>
+    unit.agents.updateConfiguration(
+      namespace.id,
+      agent.id,
+      agent.configurationId,
+      undefined,
+      { method: "credential_source", sourceId: stored.id },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      [{ sourceId: stored.id }],
+    ),
+  );
+  const storedWrites = {
+    deploy: (principalId) =>
+      controller.deployAgent(
+        principalId,
+        { namespaceId: namespace.id, agentId: agent.id },
+        resolveApprovedDevelopmentHarness,
+      ),
+    "unrelated update": (principalId) =>
+      controller.updateAgent(principalId, {
+        namespaceId: namespace.id,
+        agentId: agent.id,
+        configurationId: agent.configurationId,
+      }),
+  };
+  for (const [name, write] of Object.entries(storedWrites)) {
+    const administered = await outcome(write, administrator);
+    assert.equal(administered.gateway, true, name);
+    assert.equal(administered.status, 409, name);
+    assert.equal((await outcome(write, editor)).status, 403, name);
+  }
 });
 
 test("Namespace IAM delegates operate on an exact credential source to an Agent principal", async () => {

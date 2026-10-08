@@ -135,6 +135,7 @@ import {
 } from "./driver-contract.ts";
 import {
   AGENT_NAME_CONFLICT,
+  AgentCredentialSourceBindingError,
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
@@ -149,7 +150,6 @@ import {
   ComputeGatewaySettingError,
   ComputeProvisioningRefusedError,
   ConfigurationHarnessError,
-  AgentCredentialSourceBindingError,
   CredentialGatewayNotConfiguredError,
   IAMAccessBindingRoleError,
   IAMPolicyValidationError,
@@ -253,6 +253,7 @@ export type { RemovedAccessBinding } from "./iam-policy-cleanup.ts";
 export {
   ActivationFailedError,
   ActivationPendingError,
+  AgentCredentialSourceBindingError,
   AgentDeletingError,
   AgentPrincipalAuthorizationError,
   AuthorizationDeniedError,
@@ -267,7 +268,6 @@ export {
   ComputeGatewaySettingError,
   ComputeProvisioningRefusedError,
   ConfigurationHarnessError,
-  AgentCredentialSourceBindingError,
   CredentialGatewayNotConfiguredError,
   IAMAccessBindingRoleError,
   IAMPolicyValidationError,
