@@ -120,14 +120,13 @@ again and returns `409`.
 
 `packages/occ/src/index.ts:authorizeHarnessAuthSource`
 
-PATCH first authorizes the caller's `credential_source:operate` on each source
-the Agent already binds (`authorizeBoundCredentialSources`), without looking it
-up, so after a gateway change an update can still remove the old sources. Agent
-create and PATCH then authorize `operate` on each source the request binds.
-Then, before any lookup, an Installation without a Credential Gateway fails with
-`CredentialGatewayNotConfiguredError` (`409`), so the answer never depends on
-whether the source exists. A source the request binds must be `ready` in the
-exact Namespace and owned by the selected gateway. The generated
+PATCH first authorizes `credential_source:operate` on each already-bound
+source, without a lookup (`authorizeBoundCredentialSources`), so an
+update can drop sources after a gateway change. Create and PATCH then authorize
+`operate` on each requested source; before any lookup, an Installation without
+a Credential Gateway fails with `CredentialGatewayNotConfiguredError` (`409`),
+so the answer never depends on whether the source exists. The source must be
+`ready` in the exact Namespace and owned by the selected gateway. The generated
 `agents.harness_auth_credential_source_id` column references the source, so the
 database rejects deleting a source an Agent draft still uses.
 
@@ -324,7 +323,7 @@ attempt that exhausted its retries during a gateway outage resumes after it.
 
 ## Changelog
 
-- 2026-10-08 09:30: Agent PATCH needs only `operate` on the sources it already binds, so an update can drop sources after the Credential Gateway changes. (fix-782)
+- 2026-10-08 09:30: Agent PATCH needs only `operate` on already-bound sources. (fix-782)
 - 2026-10-08 09:00: Deploying listed sources without a Sandbox Driver returns `409` with its message, not the generic "already exists". (fix-786)
 - 2026-10-08 08:30: Agent binding reports a missing Credential Gateway as `409 CREDENTIAL_GATEWAY_NOT_CONFIGURED` and an unlisted Harness source as `400`, after the caller's `operate` checks. (fix-783-784)
 - 2026-10-07 18:00: Unified binding: one `credentialSources` list holds every source, and a credential-source `harnessAuth` names a listed entry. (claude-code/session_014fi7Uq1LyofgqwLrLoQ3yY - ee950468c)
