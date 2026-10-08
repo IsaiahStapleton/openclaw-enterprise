@@ -7180,8 +7180,9 @@ export class OpenClawController {
     if (bindings.length === 0) {
       return [];
     }
+    // A state refusal, so HTTP keeps the message instead of the generic "already exists".
     if (sandbox === undefined) {
-      throw new ResourceConflictError(
+      throw new ResourceStateConflictError(
         "Agent credential sources require a selected Sandbox Driver.",
       );
     }
