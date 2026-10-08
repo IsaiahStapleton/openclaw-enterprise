@@ -1233,6 +1233,133 @@ test("credential source registration names the missing Credential Gateway", asyn
   );
 });
 
+test("Agent reads return the bound credentialSources; revision reads return only source IDs", async () => {
+  const fixture = await createInjectedFixture({
+    computeDriver: createReadyComputeDriver("compute-credential-sources", {
+      validateHarnessAuth() {},
+      async stopRevision() {},
+      // Compute owns runtime placement; the gateway sees the paired Sandbox's Namespace.
+      async resolveSandboxNamespace(namespace) {
+        return { ...namespace, name: `placed-${namespace.id.slice(-12)}` };
+      },
+    }),
+  });
+  const controller = {
+    request: (method, path, options) => injectedRequest(fixture.app, method, path, options),
+  };
+  await bootstrap(controller);
+  const namespace = await createNamespace(controller, "credential-source-binding");
+  await fixture.controller.handleNamespaceLifecycle(fixture.principal.id, namespace.id, "ready");
+  const gateway = {
+    id: "credential-gateway-api",
+    capability: "credential_gateway",
+    implementation: "test-recording-gateway",
+    async listSourceTypes() {
+      return [
+        {
+          type: "registry",
+          config: [{ name: "host", required: true }],
+          secrets: [],
+          rotation: "none",
+        },
+      ];
+    },
+    async registerSource() {
+      return { state: "ready" };
+    },
+    async updateSource() {
+      return { state: "ready" };
+    },
+    async rotateSource() {
+      return { state: "ready" };
+    },
+    async sourceStatus() {
+      return { state: "ready" };
+    },
+    async removeSource() {},
+    async attachForRevision(context) {
+      return context.sources.map((entry) => ({ sourceId: entry.id, ref: entry.id }));
+    },
+    async attachmentStatus(context) {
+      return context.sources.map((entry) => ({ sourceId: entry.id, state: "ready" }));
+    },
+    async withdraw() {
+      return { state: "revoked" };
+    },
+  };
+  const sandbox = {
+    id: "sandbox-api",
+    capability: "sandbox",
+    implementation: "test-sandbox",
+    facets: ["networking", "filesystem", "process"],
+    async cleanup() {},
+  };
+  for (const driver of [gateway, sandbox]) {
+    fixture.controller.registerDriver(driver);
+    fixture.controller.selectDriver(driver.capability, driver.id);
+  }
+  const source = await controller.request(
+    "POST",
+    `/namespaces/${namespace.id}/credential-sources`,
+    {
+      body: { name: "registry", type: "registry", config: { host: "registry.example.com" } },
+    },
+  );
+  assert.equal(source.status, 201, JSON.stringify(source.body));
+  const configuration = await createConfiguration(controller, namespace.id, {
+    agents: {
+      defaults: {
+        model: "codex/gpt-5.6-sol",
+        models: { "codex/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+      },
+    },
+  });
+  const created = await controller.request("POST", `/namespaces/${namespace.id}/agents`, {
+    body: {
+      name: "credential-source-agent",
+      configurationId: configuration.id,
+      executionMode: "dedicated",
+      harnessAuth: { method: "runtime" },
+      credentialSources: [{ sourceId: source.data.id }],
+    },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.deepEqual(created.data.credentialSources, [{ sourceId: source.data.id }]);
+  const agentPath = `/namespaces/${namespace.id}/agents/${created.data.id}`;
+  assert.deepEqual((await controller.request("GET", agentPath)).data.credentialSources, [
+    { sourceId: source.data.id },
+  ]);
+
+  const roleId = `credential-source-operate-${created.data.id}`;
+  fixture.state.roles.push({
+    id: roleId,
+    namespaceId: namespace.id,
+    permissions: [{ action: "operate", resourceKind: "credential_source" }],
+  });
+  fixture.state.bindings.push({
+    id: roleId,
+    namespaceId: namespace.id,
+    subjectKind: "identity",
+    subjectId: created.data.servicePrincipalId,
+    roleId,
+    resourceKind: "credential_source",
+    resourceId: source.data.id,
+  });
+  fixture.state.identities.push({
+    kind: "service_principal",
+    id: created.data.servicePrincipalId,
+    namespaceId: namespace.id,
+    agentId: created.data.id,
+  });
+  const deployed = await controller.request("POST", `${agentPath}/deploy`);
+  assert.equal(deployed.status, 202, JSON.stringify(deployed.body));
+  // The gateway and type frozen at admission are private admission metadata.
+  assert.deepEqual(deployed.data.credentialSources, [{ sourceId: source.data.id }]);
+  const revision = await controller.request("GET", `${agentPath}/revisions/${deployed.data.id}`);
+  assert.equal(revision.status, 200, JSON.stringify(revision.body));
+  assert.deepEqual(revision.data.credentialSources, [{ sourceId: source.data.id }]);
+});
+
 test("a duplicate Secret name answers 409 naming the taken Secret name", async () => {
   const fixture = await createInjectedFixture();
   const controller = {
