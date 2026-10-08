@@ -176,13 +176,11 @@ topology checks, and process readiness remain required; no credential-source
 permission is needed. Kubernetes and Docker reject this method. See
 [SSH credentials](drivers/ssh-compute.md#credentials-and-supported-boundaries).
 
-API-key, OAuth, and service account token bindings require the actor's exact Secret `operate`. Every draft
-update also checks the Secret the Agent already uses, even one that replaces it. Deployment also
+API-key, OAuth, and service account token bindings require the actor's exact Secret `operate`. That includes
+the Secret the Agent already uses: every draft update checks it, including one that replaces it. Deployment also
 requires the Agent service principal's exact Secret `operate`. ChatGPT binding
-requires the actor's exact account `read`, including the current account on every draft update.
-Neither check reads the record: after a Secret Driver change, an update can omit, clear or replace
-the old Secret, but naming it again or deploying fails with `503`. There is no implied account
-grant for the Agent principal. Each consumer of a shared source is authorized independently.
+requires the actor's exact account `read`, including the current account on every draft update. There is no implied account grant for the Agent
+principal. Each consumer of a shared source is authorized independently.
 
 Deployment freezes binding references; dispatch rechecks source ownership and
 actor/Agent grants. Draft changes take effect only on deployment. Public

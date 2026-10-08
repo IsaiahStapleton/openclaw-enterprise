@@ -2485,64 +2485,6 @@ async function verifyCredentialSourceContract(
     "A revision cannot freeze an empty source list.",
   );
 
-  // Deletion is two-phase: a deleting source stays recorded and blocks Namespace
-  // teardown, but new bindings refuse it.
-  await store.transact(async (transaction) => {
-    const deleting = await transaction.credentialSources.markCredentialSourceDeleting(
-      accountNamespace.id,
-      namesakeSource.id,
-    );
-    assert.deepEqual(deleting, { ...namesakeSource, state: "deleting" });
-    assert.equal(
-      await transaction.credentialSources.markCredentialSourceDeleting(
-        accountNamespace.id,
-        namesakeSource.id,
-      ),
-      undefined,
-    );
-    assert.equal(await transaction.namespaces.hasCredentialSources(accountNamespace.id), true);
-  });
-  await assert.rejects(
-    store.transact((transaction) =>
-      transaction.agents.updateConfiguration(
-        accountNamespace.id,
-        accountAgent.id,
-        accountConfiguration.id,
-        undefined,
-        { method: "credential_source", sourceId: namesakeSource.id },
-      ),
-    ),
-    {
-      name: "ScopeViolationError",
-      message: "The Agent harness authentication references an unavailable credential source.",
-    },
-    "A deleting credential source cannot be newly bound.",
-  );
-  await store.transact(async (transaction) => {
-    assert.equal(
-      await transaction.credentialSources.deleteCredentialSource(
-        accountNamespace.id,
-        namesakeSource.id,
-      ),
-      true,
-    );
-    assert.equal(
-      await transaction.credentialSources.findCredentialSource(
-        accountNamespace.id,
-        namesakeSource.id,
-      ),
-      undefined,
-    );
-    assert.equal(await transaction.namespaces.hasCredentialSources(accountNamespace.id), false);
-    assert.equal(
-      await transaction.credentialSources.deleteCredentialSource(
-        accountNamespace.id,
-        namesakeSource.id,
-      ),
-      false,
-    );
-  });
-
   // An update that leaves harnessAuth out keeps the stored binding without checking it again;
   // only a supplied binding must be available. Here the bound source is already deleting.
   const staleSource = {
@@ -2628,4 +2570,62 @@ async function verifyCredentialSourceContract(
     { harnessAuth: detached.harnessAuth, credentialSources: detached.credentialSources },
     { harnessAuth: null, credentialSources: undefined },
   );
+
+  // Deletion is two-phase: a deleting source stays recorded and blocks Namespace
+  // teardown, but new bindings refuse it.
+  await store.transact(async (transaction) => {
+    const deleting = await transaction.credentialSources.markCredentialSourceDeleting(
+      accountNamespace.id,
+      namesakeSource.id,
+    );
+    assert.deepEqual(deleting, { ...namesakeSource, state: "deleting" });
+    assert.equal(
+      await transaction.credentialSources.markCredentialSourceDeleting(
+        accountNamespace.id,
+        namesakeSource.id,
+      ),
+      undefined,
+    );
+    assert.equal(await transaction.namespaces.hasCredentialSources(accountNamespace.id), true);
+  });
+  await assert.rejects(
+    store.transact((transaction) =>
+      transaction.agents.updateConfiguration(
+        accountNamespace.id,
+        accountAgent.id,
+        accountConfiguration.id,
+        undefined,
+        { method: "credential_source", sourceId: namesakeSource.id },
+      ),
+    ),
+    {
+      name: "ScopeViolationError",
+      message: "The Agent harness authentication references an unavailable credential source.",
+    },
+    "A deleting credential source cannot be newly bound.",
+  );
+  await store.transact(async (transaction) => {
+    assert.equal(
+      await transaction.credentialSources.deleteCredentialSource(
+        accountNamespace.id,
+        namesakeSource.id,
+      ),
+      true,
+    );
+    assert.equal(
+      await transaction.credentialSources.findCredentialSource(
+        accountNamespace.id,
+        namesakeSource.id,
+      ),
+      undefined,
+    );
+    assert.equal(await transaction.namespaces.hasCredentialSources(accountNamespace.id), false);
+    assert.equal(
+      await transaction.credentialSources.deleteCredentialSource(
+        accountNamespace.id,
+        namesakeSource.id,
+      ),
+      false,
+    );
+  });
 }
