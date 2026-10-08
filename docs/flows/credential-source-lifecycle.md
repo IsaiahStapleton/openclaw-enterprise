@@ -1,6 +1,6 @@
 ---
 created: "2026-09-26"
-updated: 2026-10-07
+updated: 2026-10-08
 last_updated_session: 01a0e5ec-d802-7800-9eb6-8022c1ac0d06
 ---
 
@@ -125,7 +125,10 @@ requested source and, for PATCH, on the current source. Then, before any lookup,
 an Installation without a Credential Gateway fails with
 `CredentialGatewayNotConfiguredError` (`409`), so the answer never depends on
 whether the source exists. The source must be
-`ready` in the exact Namespace and owned by the selected gateway. The generated
+`ready` in the exact Namespace and owned by the selected gateway. PATCH checks
+only `operate` on the sources the Agent already binds
+(`authorizeBoundCredentialSources`) and looks up only those the request lists,
+so after a gateway change an update can still remove the old sources. The generated
 `agents.harness_auth_credential_source_id` column references the source, so the
 database rejects deleting a source an Agent draft still uses.
 
@@ -321,6 +324,7 @@ attempt that exhausted its retries during a gateway outage resumes after it.
 
 ## Changelog
 
+- 2026-10-08 09:00: Agent PATCH needs only `operate` on the sources it already binds, so an update can drop sources after the Credential Gateway changes. (fix-782)
 - 2026-10-08 08:30: Agent binding reports a missing Credential Gateway as `409 CREDENTIAL_GATEWAY_NOT_CONFIGURED` and an unlisted Harness source as `400`, after the caller's `operate` checks. (fix-783-784)
 - 2026-10-07 18:00: Unified binding: one `credentialSources` list holds every source, and a credential-source `harnessAuth` names a listed entry. (claude-code/session_014fi7Uq1LyofgqwLrLoQ3yY - ee950468c)
 - 2026-10-07 12:07: Unify imported and managed PAT authentication while preserving source ownership and existing OAuth behavior. (01a0e5ec-d802-7800-9eb6-8022c1ac0d06 - be5006e62)
