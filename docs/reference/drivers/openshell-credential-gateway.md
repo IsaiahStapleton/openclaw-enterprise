@@ -75,7 +75,8 @@ Startup rejects the selection when:
 
 Both the API and the worker connect to the gateway with the Backend's
 credentials. The API registers and deletes providers; the worker creates
-Sandboxes and reads attachment status. Allow both to reach the gateway.
+Sandboxes, updates provider profiles, and reads attachment status. Allow both to
+reach the gateway.
 
 ## Source-type catalog
 
