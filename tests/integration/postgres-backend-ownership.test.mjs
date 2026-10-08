@@ -685,6 +685,7 @@ test(
         credential: { kind: "api_key", secretRef: { name: "provider-api-key", key: "api-key" } },
         binding: {},
         message: /requires an issued account access-token credential/,
+        expectedErrorName: "ResourceStateConflictError",
       },
       {
         label: "workspace-mismatch",
@@ -716,6 +717,7 @@ test(
       await expectBackendConflict(
         () => provision(namespace, brokenAccount, scenario.label),
         scenario.message,
+        scenario.expectedErrorName,
       );
       assert.equal(
         await pendingWork(namespace),
