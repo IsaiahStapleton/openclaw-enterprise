@@ -88,7 +88,8 @@ To have the Harness authenticate its model with a source, also set
 `harnessAuth` to `{ "method": "credential_source", "sourceId": "cs_…" }`. It
 names one listed entry whose catalog type has `harnessAuth`; it does not bind
 the source separately. A request that names an unlisted source, or removes the
-named source from the list, fails with `404`.
+named source from the list, fails with `400` "The Harness credential source must
+be listed in the Agent's credentialSources." after the grant checks below.
 
 The caller needs `credential_source:operate` on each exact
 source, including any the update removes. Deployment also requires the Agent's
@@ -96,7 +97,9 @@ service principal to have `operate` on each source; grant it with a
 [Namespace IAM](authorization.md#manage-namespace-policy) Role and an exact
 `credential_source` AccessBinding. The principal needs no permission on the
 underlying Secret. The worker rechecks both grants before it
-provisions the revision. See [Harness execution](harness-execution.md#harness-authentication)
+provisions the revision. On an Installation with no Credential Gateway, binding
+any source fails with `409 CREDENTIAL_GATEWAY_NOT_CONFIGURED`, as registration
+does, once the caller holds `operate` on it. See [Harness execution](harness-execution.md#harness-authentication)
 for the supported topology.
 
 While a Credential Gateway is selected, deployment rejects `api_key` and
@@ -209,12 +212,12 @@ deleted, and its referenced Secrets cannot be deleted.
 
 | Status                                  | Meaning                                                                                                                                                                                  |
 | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400 INVALID_REQUEST`                   | The body or a field name is malformed, or a Secret reference names another Namespace.                                                                                                    |
+| `400 INVALID_REQUEST`                   | The body or a field name is malformed, a Secret reference names another Namespace, or a credential-source `harnessAuth` is not listed.                                                   |
 | `403 FORBIDDEN`                         | A required `credential_source` or `secret` permission is missing.                                                                                                                        |
 | `404 NOT_FOUND`                         | The source, Secret, or type is not in the exact Namespace or catalog, or a catalog field is invalid; or the Agent's active revision does not use the source or has no withdrawal for it. |
 | `409 NAMESPACE_NOT_READY`               | The Namespace is not `ready`.                                                                                                                                                            |
 | `409 RESOURCE_CONFLICT`                 | The source is still referenced, not `ready` for an update, or changed during the request; or the Agent has no active revision to withdraw from.                                          |
-| `409 CREDENTIAL_GATEWAY_NOT_CONFIGURED` | Registration on an Installation that selects no Credential Gateway.                                                                                                                      |
+| `409 CREDENTIAL_GATEWAY_NOT_CONFIGURED` | Registration or Agent binding on an Installation that selects no Credential Gateway.                                                                                                     |
 | `503 DEPENDENCY_UNAVAILABLE`            | The selected Credential Gateway or the Secret Driver is unavailable, or the gateway call failed.                                                                                         |
 
 ## Related
