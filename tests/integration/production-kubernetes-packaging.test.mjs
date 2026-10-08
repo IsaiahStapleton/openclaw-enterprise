@@ -433,6 +433,31 @@ test(
   },
 );
 
+test("the chart refuses an API port the server does not bind", tooling, async () => {
+  for (const port of ["0", "010", "65536", "9.5"]) {
+    await assert.rejects(render({ "api.port": port }), /api\.port must be an integer TCP port/);
+  }
+  const objects = await resources((await render({ "api.port": "8081" })).stdout);
+  const container = objects.find(
+    (item) => item.kind === "Deployment" && item.metadata.name === "openclaw-enterprise-api",
+  ).spec.template.spec.containers[0];
+  assert.equal(container.env.find((item) => item.name === "OCC_PORT").value, "8081");
+  assert.ok(container.ports.some((port) => port.name === "http" && port.containerPort === 8081));
+  assert.equal(
+    objects.find(
+      (item) => item.kind === "Service" && item.metadata.name === "openclaw-enterprise-api",
+    ).spec.ports[0].port,
+    8081,
+  );
+  assert.equal(
+    objects.find(
+      (item) =>
+        item.kind === "NetworkPolicy" && item.metadata.name === "openclaw-enterprise-api-ingress",
+    ).spec.ingress[0].ports[0].port,
+    8081,
+  );
+});
+
 function routeNamespaceLabel(namespace, gatewayName) {
   return createHash("sha256").update(`${namespace}/${gatewayName}`).digest("hex").slice(0, 12);
 }
