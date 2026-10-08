@@ -8,8 +8,11 @@
 // The lock is `<state>.lock`, created atomically with link(2), holding the owner's pid
 // and a random token. Waiters poll it. A lock whose owner process no longer exists is
 // abandoned (a test killed by its timeout): a waiter renames it aside, so only one
-// waiter can take it, and removes it. Callers in one process queue in memory first, and
-// a nested call in the same async context reuses the held lock instead of deadlocking.
+// waiter can take it, and removes it. A reused pid, or a zombie, reads as alive, so such
+// a lock is only given up at the timeout. Callers in one process queue in memory first,
+// and a nested call in the same async context reuses the held lock instead of
+// deadlocking. The holder keeps the lock for its whole operation (a fresh database's
+// migration included), so a waiter's wait counts against its own test timeout.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { link, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
@@ -55,6 +58,9 @@ async function removeAbandonedLock(path, content) {
   if (content === undefined || processExists(lockOwner(content))) {
     return;
   }
+  if ((await readLock(path)) !== content) {
+    return;
+  }
   const aside = join(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.abandoned`);
   try {
     await rename(path, aside);
@@ -67,11 +73,15 @@ async function removeAbandonedLock(path, content) {
   try {
     if ((await readFile(aside, "utf8")) !== content) {
       // Another waiter removed the abandoned lock and a live process took a new one.
-      // link(2) never replaces a file, so this cannot displace a third holder.
+      // link(2) never replaces a file. If a third process took the lock in this gap,
+      // two holders now overlap: fail here rather than let them both write the state.
+      // It needs a dead holder and three live contenders; a lane has two (the runner
+      // and one test process).
       await link(aside, path).catch((error) => {
-        if (error.code !== "EEXIST") {
-          throw error;
+        if (error.code === "EEXIST") {
+          throw new Error(`Displaced a live CI state lock ${path} and could not restore it.`);
         }
+        throw error;
       });
     }
   } finally {
@@ -112,6 +122,9 @@ async function acquireFileLock(path, timeoutMs) {
 
 async function releaseFileLock(path, token) {
   const content = await readLock(path);
+  if (content === undefined) {
+    throw new Error(`The CI state lock ${path} was removed while this process held it.`);
+  }
   if (content !== token) {
     throw new Error(`The CI state lock ${path} was taken while this process held it.`);
   }
@@ -134,14 +147,19 @@ export async function withStateLock(statePath, operation, { timeoutMs = defaultT
     await previous;
     const path = `${statePath}.lock`;
     const token = await acquireFileLock(path, timeoutMs);
+    const paths = new Set(held.getStore() ?? []);
+    paths.add(statePath);
     let result;
     try {
-      const paths = new Set(held.getStore() ?? []);
-      paths.add(statePath);
       result = await held.run(paths, operation);
-    } finally {
-      await releaseFileLock(path, token);
+    } catch (error) {
+      // Report the operation's own failure; a lost lock is secondary to it.
+      await releaseFileLock(path, token).catch((releaseError) => {
+        console.error(releaseError.message);
+      });
+      throw error;
     }
+    await releaseFileLock(path, token);
     return result;
   } finally {
     finish();
