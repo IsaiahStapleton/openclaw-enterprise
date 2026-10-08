@@ -318,6 +318,8 @@ for (const phase of ["admission", "gateway key"]) {
     await app.listen({ host: "127.0.0.1", port: 0 });
     const address = app.server.address();
     assert.ok(address && typeof address === "object");
+    const serverSockets = [];
+    app.server.on("connection", (socket) => serverSockets.push(socket));
     try {
       await new Promise((resolve, reject) => {
         const socket = net.connect(address.port, "127.0.0.1");
@@ -332,7 +334,7 @@ for (const phase of ["admission", "gateway key"]) {
           const waitForPhase = () => {
             if (entered[phase] || Date.now() > waitUntil) {
               socket.resetAndDestroy();
-              setTimeout(resolve, 50);
+              resolve();
               return;
             }
             setTimeout(waitForPhase, 10);
@@ -341,6 +343,13 @@ for (const phase of ["admission", "gateway key"]) {
         });
       });
       assert.equal(entered[phase], true, `the upgrade must reach the pending ${phase}`);
+      // Release the gate only once the server has seen the reset.
+      const resetDeadline = Date.now() + 2000;
+      while (!serverSockets.every((socket) => socket.destroyed) && Date.now() < resetDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(serverSockets.length, 1);
+      assert.equal(serverSockets[0].destroyed, true, "the server must observe the reset");
       gates[phase]();
       // Give a wrongly continued upgrade time to read the key or dial the gateway.
       await new Promise((resolve) => setTimeout(resolve, 300));

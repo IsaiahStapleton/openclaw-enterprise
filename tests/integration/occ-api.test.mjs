@@ -1330,12 +1330,18 @@ test("Agent reads return the bound credentialSources; revision reads return only
     { sourceId: source.data.id },
   ]);
 
+  const roleId = `credential-source-operate-${created.data.id}`;
+  fixture.state.roles.push({
+    id: roleId,
+    namespaceId: namespace.id,
+    permissions: [{ action: "operate", resourceKind: "credential_source" }],
+  });
   fixture.state.bindings.push({
-    id: "agent-source-operate",
+    id: roleId,
     namespaceId: namespace.id,
     subjectKind: "identity",
     subjectId: created.data.servicePrincipalId,
-    roleId: fixture.state.roles[0].id,
+    roleId,
     resourceKind: "credential_source",
     resourceId: source.data.id,
   });

@@ -1336,6 +1336,7 @@ test("an Agent's credentialSources list is validated, and binding or unbinding n
   await assert.rejects(update([{ sourceId: 7 }]), invalid);
   await assert.rejects(update([{ sourceId: "" }]), invalid);
   await assert.rejects(update({ sourceId: kept.id }), invalid);
+  await assert.rejects(update([{ sourceId: kept.id }, { sourceId: kept.id }]), invalid);
 
   // Creating an Agent that lists a source needs operate on that exact source.
   const denyOperate = (source) =>
@@ -1432,7 +1433,7 @@ test("an Agent's credentialSources list is validated, and binding or unbinding n
   await assert.rejects(updateFields({ credentialSources: [{ sourceId: added.id }] }), listed);
 });
 
-test("binding refuses a missing, deleting or foreign-gateway source in the exact Namespace", async () => {
+test("binding refuses a missing, deleting, other-Namespace or foreign-gateway source", async () => {
   let failRemove = false;
   const { controller, dedicatedAgent, gateway, makeReady, namespace } = await fixture({
     gateway: { removeError: () => (failRemove ? new Error("gateway unavailable") : undefined) },
@@ -1460,6 +1461,16 @@ test("binding refuses a missing, deleting or foreign-gateway source in the exact
     message: "The credential source is unavailable in the exact Namespace.",
   };
   await assert.rejects(bind("cs_00000000-0000-4000-8000-00000000ffff"), unavailable);
+  // A ready source of another Namespace is not in the Agent's Namespace.
+  const other = await controller.createNamespace(administrator, { name: "Other source tenant" });
+  await controller.handleNamespaceLifecycle(administrator, other.id, "ready");
+  const foreign = await controller.createCredentialSource(administrator, {
+    namespaceId: other.id,
+    name: "registry-foreign",
+    type: "registry",
+    config: { host: "registry-foreign.example.com" },
+  });
+  await assert.rejects(bind(foreign.id), unavailable);
   failRemove = true;
   await assert.rejects(
     controller.deleteCredentialSource(administrator, namespace.id, deleting.id),
