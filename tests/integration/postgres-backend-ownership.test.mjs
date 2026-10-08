@@ -705,7 +705,11 @@ test(
       );
       if (scenario.credential !== undefined) {
         await fixture.state.transact((unit) =>
-          unit.serviceAccounts.updateCredential(namespace.id, brokenAccount.id, scenario.credential),
+          unit.serviceAccounts.updateCredential(
+            namespace.id,
+            brokenAccount.id,
+            scenario.credential,
+          ),
         );
       }
       await seedBackendBinding(fixture.pool, brokenAccount, scenario.binding);
@@ -713,7 +717,11 @@ test(
         () => provision(namespace, brokenAccount, scenario.label),
         scenario.message,
       );
-      assert.equal(await pendingWork(namespace), 0, `${scenario.label} must not queue provisioning`);
+      assert.equal(
+        await pendingWork(namespace),
+        0,
+        `${scenario.label} must not queue provisioning`,
+      );
       await fixture.cleanup(namespace);
     }
   },
