@@ -2302,6 +2302,66 @@ test(
 );
 
 test(
+  "a pending provisioning request is named as a Secret consumer only while its actor may read its ServiceAccount",
+  { ...requiresPostgres, timeout: 60_000 },
+  async (context) => {
+    const fixture = await createFixture(context);
+    const namespace = await fixture.bootstrapNamespace();
+    const secrets = await createProvisioningSecrets(fixture, namespace.id);
+    const created = await fixture.request("POST", `/namespaces/${namespace.id}/service-accounts`, {
+      body: { name: `consumer-account-${randomUUID().slice(0, 8)}` },
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const account = created.data;
+    // No worker runs: the stored plan stays queued and keeps referencing its Secrets.
+    const actorId = await fixture.administratorPrincipalId();
+    const body = provisioningBody(namespace.id, secrets);
+    const workId = `agent-provisioning:${randomUUID().replaceAll("-", "")}`;
+    await fixture.state.transact((unit) =>
+      unit.provisioning.create({
+        workId,
+        namespaceId: namespace.id,
+        actorId,
+        requestId: body.requestId,
+        requestFingerprint: "0".repeat(64),
+        plan: {
+          name: body.name,
+          configuration: body.configuration,
+          harnessAuth: {
+            method: "codex_pat",
+            source: { kind: "service_account", namespaceId: account.namespaceId, id: account.id },
+          },
+          executionMode: body.executionMode,
+          drivers: {
+            compute: fixture.computeDriver.id,
+            configuration: fixture.configurationDriver.id,
+            iam: "native-iam",
+          },
+        },
+      }),
+    );
+    const secretPath = `/namespaces/${namespace.id}/secrets/${secrets.slackBotToken.id}`;
+    const consumers = async () => {
+      const read = await fixture.request("GET", secretPath);
+      assert.equal(read.status, 200, JSON.stringify(read.body));
+      return read.data.consumers;
+    };
+    assert.deepEqual((await consumers()).provisioningRequests, [workId]);
+
+    // The status read checks the plan's account read; once denied, the request is only counted.
+    await fixture.pool.query(
+      `INSERT INTO occ.iam_restrictions (id, namespace_id, action, resource_kind, resource_id)
+       VALUES ($1, $2, 'read', 'service_account', $3)`,
+      [`restriction_${randomUUID()}`, namespace.id, account.id],
+    );
+    const hidden = await consumers();
+    assert.deepEqual(hidden.provisioningRequests, []);
+    assert.equal(hidden.unreadable, 1);
+    assert.doesNotMatch(JSON.stringify(hidden), new RegExp(workId));
+  },
+);
+
+test(
   "a provisioned Agent's first Configuration is deletable after the Agent switches away",
   { ...requiresPostgres, timeout: 60_000 },
   async (context) => {
