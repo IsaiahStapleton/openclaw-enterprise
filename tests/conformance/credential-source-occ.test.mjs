@@ -2161,7 +2161,7 @@ test("deploy admission rechecks every listed source for the deployer, Sandbox an
       resolveApprovedDevelopmentHarness,
     ),
     {
-      name: "ResourceConflictError",
+      name: "ResourceStateConflictError",
       message: "Agent credential sources require a selected Sandbox Driver.",
     },
   );
