@@ -1304,324 +1304,6 @@ test("one credentialSources list binds every source, and harnessAuth names a lis
   assert.equal(cleared.credentialSources, undefined);
 });
 
-test("an Agent's credentialSources list is validated, and binding or unbinding needs operate", async () => {
-  const { controller, dedicatedAgent, iamState, makeReady, namespace } = await fixture();
-  await makeReady();
-  const registry = (name) =>
-    controller.createCredentialSource(administrator, {
-      namespaceId: namespace.id,
-      name,
-      type: "registry",
-      config: { host: `${name}.example.com` },
-    });
-  const kept = await registry("registry-kept");
-  const added = await registry("registry-added");
-  const agent = await dedicatedAgent();
-  const update = (credentialSources) =>
-    controller.updateAgent(administrator, {
-      namespaceId: namespace.id,
-      agentId: agent.id,
-      configurationId: agent.configurationId,
-      credentialSources,
-    });
-  const invalid = {
-    name: "ScopeViolationError",
-    message: "The Agent credential sources are invalid.",
-  };
-
-  // The controller enforces the list grammar itself, whatever the store would accept.
-  const nine = Array.from({ length: 9 }, (_, i) => ({ sourceId: `${kept.id}-${i}` }));
-  await assert.rejects(update(nine), invalid);
-  await assert.rejects(update([{ sourceId: kept.id, type: "registry" }]), invalid);
-  await assert.rejects(update([{ sourceId: 7 }]), invalid);
-  await assert.rejects(update([{ sourceId: "" }]), invalid);
-  await assert.rejects(update({ sourceId: kept.id }), invalid);
-  await assert.rejects(update([{ sourceId: kept.id }, { sourceId: kept.id }]), invalid);
-
-  // Creating an Agent that lists a source needs operate on that exact source.
-  const denyOperate = (source) =>
-    iamState.restrictions.push({
-      id: `deny-operate-${source.id}`,
-      namespaceId: namespace.id,
-      action: "operate",
-      resourceKind: "credential_source",
-      resourceId: source.id,
-      effect: "deny",
-    });
-  denyOperate(added);
-  await assert.rejects(
-    controller.createAgent(administrator, {
-      namespaceId: namespace.id,
-      name: `listed-${crypto.randomUUID()}`,
-      configurationId: agent.configurationId,
-      executionMode: "dedicated",
-      credentialSources: [{ sourceId: added.id }],
-    }),
-    (error) => {
-      assert.ok(error instanceof AuthorizationDeniedError);
-      assert.deepEqual(error.authorization.resource, {
-        kind: "credential_source",
-        namespaceId: namespace.id,
-        id: added.id,
-      });
-      return true;
-    },
-  );
-  iamState.restrictions.length = 0;
-
-  // Unbinding a source needs operate on it too: a caller who lost operate on the bound source
-  // cannot swap it out for another one.
-  assert.deepEqual((await update([{ sourceId: kept.id }])).credentialSources, [
-    { sourceId: kept.id },
-  ]);
-  denyOperate(kept);
-  await assert.rejects(update([{ sourceId: added.id }]), (error) => {
-    assert.ok(error instanceof AuthorizationDeniedError);
-    assert.equal(error.authorization.resource.id, kept.id);
-    return true;
-  });
-  assert.deepEqual(
-    (await controller.getAgent(administrator, namespace.id, agent.id)).credentialSources,
-    [{ sourceId: kept.id }],
-  );
-  iamState.restrictions.length = 0;
-  assert.deepEqual((await update([{ sourceId: added.id }])).credentialSources, [
-    { sourceId: added.id },
-  ]);
-  const created = await controller.createAgent(administrator, {
-    namespaceId: namespace.id,
-    name: `listed-${crypto.randomUUID()}`,
-    configurationId: agent.configurationId,
-    executionMode: "dedicated",
-    credentialSources: [{ sourceId: added.id }, { sourceId: kept.id }],
-  });
-  assert.deepEqual(created.credentialSources, [{ sourceId: added.id }, { sourceId: kept.id }]);
-
-  // The controller names the listing rule itself; the store's own check is a backstop.
-  const listed = {
-    name: "ScopeViolationError",
-    message: "The Harness credential source must be listed in the Agent's credentialSources.",
-  };
-  const model = await controller.createCredentialSource(administrator, {
-    namespaceId: namespace.id,
-    name: "openai",
-    type: "openai",
-    secrets: {
-      api_key: (
-        await controller.createSecret(administrator, {
-          namespaceId: namespace.id,
-          name: `model-key-${crypto.randomUUID()}`,
-          value: "synthetic-model-key",
-        })
-      ).ref,
-    },
-  });
-  const harnessAuth = { method: "credential_source", sourceId: model.id };
-  const updateFields = (fields) =>
-    controller.updateAgent(administrator, {
-      namespaceId: namespace.id,
-      agentId: agent.id,
-      configurationId: agent.configurationId,
-      ...fields,
-    });
-  await assert.rejects(updateFields({ harnessAuth }), listed);
-  await assert.rejects(
-    updateFields({ harnessAuth, credentialSources: [{ sourceId: added.id }] }),
-    listed,
-  );
-  await updateFields({ harnessAuth, credentialSources: [{ sourceId: model.id }] });
-  await assert.rejects(updateFields({ credentialSources: [{ sourceId: added.id }] }), listed);
-});
-
-test("binding refuses a missing, deleting, other-Namespace or foreign-gateway source", async () => {
-  let failRemove = false;
-  const { controller, dedicatedAgent, gateway, makeReady, namespace } = await fixture({
-    gateway: { removeError: () => (failRemove ? new Error("gateway unavailable") : undefined) },
-  });
-  await makeReady();
-  const registry = (name) =>
-    controller.createCredentialSource(administrator, {
-      namespaceId: namespace.id,
-      name,
-      type: "registry",
-      config: { host: `${name}.example.com` },
-    });
-  const deleting = await registry("registry-deleting");
-  const ready = await registry("registry-ready");
-  const agent = await dedicatedAgent();
-  const bind = (sourceId) =>
-    controller.updateAgent(administrator, {
-      namespaceId: namespace.id,
-      agentId: agent.id,
-      configurationId: agent.configurationId,
-      credentialSources: [{ sourceId }],
-    });
-  const unavailable = {
-    name: "ScopeViolationError",
-    message: "The credential source is unavailable in the exact Namespace.",
-  };
-  await assert.rejects(bind("cs_00000000-0000-4000-8000-00000000ffff"), unavailable);
-  // A ready source of another Namespace is not in the Agent's Namespace.
-  const other = await controller.createNamespace(administrator, { name: "Other source tenant" });
-  await controller.handleNamespaceLifecycle(administrator, other.id, "ready");
-  const foreign = await controller.createCredentialSource(administrator, {
-    namespaceId: other.id,
-    name: "registry-foreign",
-    type: "registry",
-    config: { host: "registry-foreign.example.com" },
-  });
-  await assert.rejects(bind(foreign.id), unavailable);
-  failRemove = true;
-  await assert.rejects(
-    controller.deleteCredentialSource(administrator, namespace.id, deleting.id),
-    DependencyUnavailableError,
-  );
-  // A source being deleted still exists, but it can no longer be newly bound.
-  await assert.rejects(bind(deleting.id), unavailable);
-  // A source registered through a gateway that is no longer selected cannot be bound.
-  controller.registerDriver({ ...gateway, id: "credential-gateway-replacement" });
-  controller.selectDriver("credential_gateway", "credential-gateway-replacement");
-  await assert.rejects(bind(ready.id), DependencyUnavailableError);
-  assert.equal(
-    (await controller.getAgent(administrator, namespace.id, agent.id)).credentialSources,
-    undefined,
-  );
-});
-
-test("deploy admission rechecks every listed source for the deployer, Sandbox and gateway catalog", async () => {
-  const {
-    controller,
-    dedicatedAgent,
-    gateway,
-    grantAgentSourceOperate,
-    iamState,
-    makeReady,
-    modelSecret,
-    namespace,
-  } = await fixture();
-  await makeReady();
-  const model = await controller.createCredentialSource(administrator, {
-    namespaceId: namespace.id,
-    name: "openai",
-    type: "openai",
-    secrets: { api_key: (await modelSecret()).ref },
-  });
-  const source = await controller.createCredentialSource(administrator, {
-    namespaceId: namespace.id,
-    name: "registry",
-    type: "registry",
-    config: { host: "registry.example.com" },
-  });
-  const agent = await dedicatedAgent();
-  await controller.updateAgent(administrator, {
-    namespaceId: namespace.id,
-    agentId: agent.id,
-    configurationId: agent.configurationId,
-    harnessAuth: { method: "credential_source", sourceId: model.id },
-    credentialSources: [{ sourceId: model.id }, { sourceId: source.id }],
-  });
-  grantAgentSourceOperate(agent, model);
-  grantAgentSourceOperate(agent, source, "registry");
-  const deploy = () =>
-    controller.deployAgent(
-      administrator,
-      { namespaceId: namespace.id, agentId: agent.id },
-      resolveApprovedDevelopmentHarness,
-    );
-
-  // The Agent principal's grant is not enough: the deploying caller must still operate it.
-  const sourceless = "principal-deployer-without-source-operate";
-  const administratorRole = iamState.roles.find(({ id }) => id === "source-administrator-role");
-  iamState.identities.push({
-    kind: "principal",
-    id: sourceless,
-    issuer: "credential-source-occ",
-    subject: sourceless,
-  });
-  iamState.roles.push({
-    id: "deployer-without-source-operate-role",
-    permissions: administratorRole.permissions.filter(
-      ({ action, resourceKind }) => !(action === "operate" && resourceKind === "credential_source"),
-    ),
-  });
-  iamState.bindings.push(
-    {
-      id: "deployer-without-source-operate-binding",
-      subjectKind: "identity",
-      subjectId: sourceless,
-      roleId: "deployer-without-source-operate-role",
-    },
-    {
-      id: "deployer-model-operate-binding",
-      namespaceId: namespace.id,
-      subjectKind: "identity",
-      subjectId: sourceless,
-      roleId: "source-agent-role",
-      resourceKind: "credential_source",
-      resourceId: model.id,
-    },
-  );
-  await assert.rejects(
-    controller.deployAgent(
-      sourceless,
-      { namespaceId: namespace.id, agentId: agent.id },
-      resolveApprovedDevelopmentHarness,
-    ),
-    (error) => {
-      assert.ok(error instanceof AuthorizationDeniedError);
-      assert.deepEqual(error.authorization, {
-        action: "operate",
-        resource: { kind: "credential_source", namespaceId: namespace.id, id: source.id },
-      });
-      return true;
-    },
-  );
-
-  // A source type the selected gateway no longer offers is not frozen into a revision.
-  const listSourceTypes = gateway.listSourceTypes;
-  gateway.listSourceTypes = async () =>
-    (await listSourceTypes()).filter(({ type }) => type !== "registry");
-  await assert.rejects(deploy(), {
-    name: "ScopeViolationError",
-    message: "The selected Credential Gateway does not support this source type.",
-  });
-  gateway.listSourceTypes = listSourceTypes;
-  assert.deepEqual((await deploy()).credentialSources, [
-    { sourceId: model.id, credentialGatewayId: gateway.id, sourceType: "openai" },
-    { sourceId: source.id, credentialGatewayId: gateway.id, sourceType: "registry" },
-  ]);
-
-  // Only a Sandbox Driver can carry listed sources into the runtime.
-  const unsandboxed = await fixture({ withoutSandbox: true });
-  await unsandboxed.makeReady();
-  const unsandboxedSource = await unsandboxed.controller.createCredentialSource(administrator, {
-    namespaceId: unsandboxed.namespace.id,
-    name: "registry",
-    type: "registry",
-    config: { host: "registry.example.com" },
-  });
-  const unsandboxedAgent = await unsandboxed.dedicatedAgent();
-  await unsandboxed.controller.updateAgent(administrator, {
-    namespaceId: unsandboxed.namespace.id,
-    agentId: unsandboxedAgent.id,
-    configurationId: unsandboxedAgent.configurationId,
-    harnessAuth: { method: "runtime" },
-    credentialSources: [{ sourceId: unsandboxedSource.id }],
-  });
-  unsandboxed.grantAgentSourceOperate(unsandboxedAgent, unsandboxedSource);
-  await assert.rejects(
-    unsandboxed.controller.deployAgent(
-      administrator,
-      { namespaceId: unsandboxed.namespace.id, agentId: unsandboxedAgent.id },
-      resolveApprovedDevelopmentHarness,
-    ),
-    {
-      name: "ResourceConflictError",
-      message: "Agent credential sources require a selected Sandbox Driver.",
-    },
-  );
-});
-
 test("Namespace IAM delegates operate on an exact credential source to an Agent principal", async () => {
   const { controller, dedicatedAgent, makeReady, modelSecret, namespace } = await fixture();
   await makeReady();
@@ -1902,4 +1584,322 @@ test("a failing gateway status read reports a fixed reason, not the gateway's er
   });
   assert.equal(JSON.stringify(read).includes("synthetic-model-key"), false);
   assert.equal(JSON.stringify(read).includes("10.0.0.7"), false);
+});
+
+test("an Agent's credentialSources list is validated, and binding or unbinding needs operate", async () => {
+  const { controller, dedicatedAgent, iamState, makeReady, namespace } = await fixture();
+  await makeReady();
+  const registry = (name) =>
+    controller.createCredentialSource(administrator, {
+      namespaceId: namespace.id,
+      name,
+      type: "registry",
+      config: { host: `${name}.example.com` },
+    });
+  const kept = await registry("registry-kept");
+  const added = await registry("registry-added");
+  const agent = await dedicatedAgent();
+  const update = (credentialSources) =>
+    controller.updateAgent(administrator, {
+      namespaceId: namespace.id,
+      agentId: agent.id,
+      configurationId: agent.configurationId,
+      credentialSources,
+    });
+  const invalid = {
+    name: "ScopeViolationError",
+    message: "The Agent credential sources are invalid.",
+  };
+
+  // The controller enforces the list grammar itself, whatever the store would accept.
+  const nine = Array.from({ length: 9 }, (_, i) => ({ sourceId: `${kept.id}-${i}` }));
+  await assert.rejects(update(nine), invalid);
+  await assert.rejects(update([{ sourceId: kept.id, type: "registry" }]), invalid);
+  await assert.rejects(update([{ sourceId: 7 }]), invalid);
+  await assert.rejects(update([{ sourceId: "" }]), invalid);
+  await assert.rejects(update({ sourceId: kept.id }), invalid);
+  await assert.rejects(update([{ sourceId: kept.id }, { sourceId: kept.id }]), invalid);
+
+  // Creating an Agent that lists a source needs operate on that exact source.
+  const denyOperate = (source) =>
+    iamState.restrictions.push({
+      id: `deny-operate-${source.id}`,
+      namespaceId: namespace.id,
+      action: "operate",
+      resourceKind: "credential_source",
+      resourceId: source.id,
+      effect: "deny",
+    });
+  denyOperate(added);
+  await assert.rejects(
+    controller.createAgent(administrator, {
+      namespaceId: namespace.id,
+      name: `listed-${crypto.randomUUID()}`,
+      configurationId: agent.configurationId,
+      executionMode: "dedicated",
+      credentialSources: [{ sourceId: added.id }],
+    }),
+    (error) => {
+      assert.ok(error instanceof AuthorizationDeniedError);
+      assert.deepEqual(error.authorization.resource, {
+        kind: "credential_source",
+        namespaceId: namespace.id,
+        id: added.id,
+      });
+      return true;
+    },
+  );
+  iamState.restrictions.length = 0;
+
+  // Unbinding a source needs operate on it too: a caller who lost operate on the bound source
+  // cannot swap it out for another one.
+  assert.deepEqual((await update([{ sourceId: kept.id }])).credentialSources, [
+    { sourceId: kept.id },
+  ]);
+  denyOperate(kept);
+  await assert.rejects(update([{ sourceId: added.id }]), (error) => {
+    assert.ok(error instanceof AuthorizationDeniedError);
+    assert.equal(error.authorization.resource.id, kept.id);
+    return true;
+  });
+  assert.deepEqual(
+    (await controller.getAgent(administrator, namespace.id, agent.id)).credentialSources,
+    [{ sourceId: kept.id }],
+  );
+  iamState.restrictions.length = 0;
+  assert.deepEqual((await update([{ sourceId: added.id }])).credentialSources, [
+    { sourceId: added.id },
+  ]);
+  const created = await controller.createAgent(administrator, {
+    namespaceId: namespace.id,
+    name: `listed-${crypto.randomUUID()}`,
+    configurationId: agent.configurationId,
+    executionMode: "dedicated",
+    credentialSources: [{ sourceId: added.id }, { sourceId: kept.id }],
+  });
+  assert.deepEqual(created.credentialSources, [{ sourceId: added.id }, { sourceId: kept.id }]);
+
+  // The controller names the listing rule itself; the store's own check is a backstop with
+  // another message. Only the message is pinned, so the error class can still change.
+  const listed = {
+    message: "The Harness credential source must be listed in the Agent's credentialSources.",
+  };
+  const model = await controller.createCredentialSource(administrator, {
+    namespaceId: namespace.id,
+    name: "openai",
+    type: "openai",
+    secrets: {
+      api_key: (
+        await controller.createSecret(administrator, {
+          namespaceId: namespace.id,
+          name: `model-key-${crypto.randomUUID()}`,
+          value: "synthetic-model-key",
+        })
+      ).ref,
+    },
+  });
+  const harnessAuth = { method: "credential_source", sourceId: model.id };
+  const updateFields = (fields) =>
+    controller.updateAgent(administrator, {
+      namespaceId: namespace.id,
+      agentId: agent.id,
+      configurationId: agent.configurationId,
+      ...fields,
+    });
+  await assert.rejects(updateFields({ harnessAuth }), listed);
+  await assert.rejects(
+    updateFields({ harnessAuth, credentialSources: [{ sourceId: added.id }] }),
+    listed,
+  );
+  await updateFields({ harnessAuth, credentialSources: [{ sourceId: model.id }] });
+  await assert.rejects(updateFields({ credentialSources: [{ sourceId: added.id }] }), listed);
+});
+
+test("binding refuses a missing, deleting, other-Namespace or foreign-gateway source", async () => {
+  let failRemove = false;
+  const { controller, dedicatedAgent, gateway, makeReady, namespace } = await fixture({
+    gateway: { removeError: () => (failRemove ? new Error("gateway unavailable") : undefined) },
+  });
+  await makeReady();
+  const registry = (name) =>
+    controller.createCredentialSource(administrator, {
+      namespaceId: namespace.id,
+      name,
+      type: "registry",
+      config: { host: `${name}.example.com` },
+    });
+  const deleting = await registry("registry-deleting");
+  const ready = await registry("registry-ready");
+  const agent = await dedicatedAgent();
+  const bind = (sourceId) =>
+    controller.updateAgent(administrator, {
+      namespaceId: namespace.id,
+      agentId: agent.id,
+      configurationId: agent.configurationId,
+      credentialSources: [{ sourceId }],
+    });
+  const unavailable = {
+    name: "ScopeViolationError",
+    message: "The credential source is unavailable in the exact Namespace.",
+  };
+  await assert.rejects(bind("cs_00000000-0000-4000-8000-00000000ffff"), unavailable);
+  // A ready source of another Namespace is not in the Agent's Namespace.
+  const other = await controller.createNamespace(administrator, { name: "Other source tenant" });
+  await controller.handleNamespaceLifecycle(administrator, other.id, "ready");
+  const foreign = await controller.createCredentialSource(administrator, {
+    namespaceId: other.id,
+    name: "registry-foreign",
+    type: "registry",
+    config: { host: "registry-foreign.example.com" },
+  });
+  await assert.rejects(bind(foreign.id), unavailable);
+  failRemove = true;
+  await assert.rejects(
+    controller.deleteCredentialSource(administrator, namespace.id, deleting.id),
+    DependencyUnavailableError,
+  );
+  // A source being deleted still exists, but it can no longer be newly bound.
+  await assert.rejects(bind(deleting.id), unavailable);
+  // A source registered through a gateway that is no longer selected cannot be bound.
+  controller.registerDriver({ ...gateway, id: "credential-gateway-replacement" });
+  controller.selectDriver("credential_gateway", "credential-gateway-replacement");
+  await assert.rejects(bind(ready.id), DependencyUnavailableError);
+  assert.equal(
+    (await controller.getAgent(administrator, namespace.id, agent.id)).credentialSources,
+    undefined,
+  );
+});
+
+test("deploy admission rechecks every listed source for the deployer, Sandbox and gateway catalog", async () => {
+  const {
+    controller,
+    dedicatedAgent,
+    gateway,
+    grantAgentSourceOperate,
+    iamState,
+    makeReady,
+    modelSecret,
+    namespace,
+  } = await fixture();
+  await makeReady();
+  const model = await controller.createCredentialSource(administrator, {
+    namespaceId: namespace.id,
+    name: "openai",
+    type: "openai",
+    secrets: { api_key: (await modelSecret()).ref },
+  });
+  const source = await controller.createCredentialSource(administrator, {
+    namespaceId: namespace.id,
+    name: "registry",
+    type: "registry",
+    config: { host: "registry.example.com" },
+  });
+  const agent = await dedicatedAgent();
+  await controller.updateAgent(administrator, {
+    namespaceId: namespace.id,
+    agentId: agent.id,
+    configurationId: agent.configurationId,
+    harnessAuth: { method: "credential_source", sourceId: model.id },
+    credentialSources: [{ sourceId: model.id }, { sourceId: source.id }],
+  });
+  grantAgentSourceOperate(agent, model);
+  grantAgentSourceOperate(agent, source, "registry");
+  const deploy = () =>
+    controller.deployAgent(
+      administrator,
+      { namespaceId: namespace.id, agentId: agent.id },
+      resolveApprovedDevelopmentHarness,
+    );
+
+  // The Agent principal's grant is not enough: the deploying caller must still operate it.
+  const sourceless = "principal-deployer-without-source-operate";
+  const administratorRole = iamState.roles.find(({ id }) => id === "source-administrator-role");
+  iamState.identities.push({
+    kind: "principal",
+    id: sourceless,
+    issuer: "credential-source-occ",
+    subject: sourceless,
+  });
+  iamState.roles.push({
+    id: "deployer-without-source-operate-role",
+    permissions: administratorRole.permissions.filter(
+      ({ action, resourceKind }) => !(action === "operate" && resourceKind === "credential_source"),
+    ),
+  });
+  iamState.bindings.push(
+    {
+      id: "deployer-without-source-operate-binding",
+      subjectKind: "identity",
+      subjectId: sourceless,
+      roleId: "deployer-without-source-operate-role",
+    },
+    {
+      id: "deployer-model-operate-binding",
+      namespaceId: namespace.id,
+      subjectKind: "identity",
+      subjectId: sourceless,
+      roleId: "source-agent-role",
+      resourceKind: "credential_source",
+      resourceId: model.id,
+    },
+  );
+  await assert.rejects(
+    controller.deployAgent(
+      sourceless,
+      { namespaceId: namespace.id, agentId: agent.id },
+      resolveApprovedDevelopmentHarness,
+    ),
+    (error) => {
+      assert.ok(error instanceof AuthorizationDeniedError);
+      assert.deepEqual(error.authorization, {
+        action: "operate",
+        resource: { kind: "credential_source", namespaceId: namespace.id, id: source.id },
+      });
+      return true;
+    },
+  );
+
+  // A source type the selected gateway no longer offers is not frozen into a revision.
+  const listSourceTypes = gateway.listSourceTypes;
+  gateway.listSourceTypes = async () =>
+    (await listSourceTypes()).filter(({ type }) => type !== "registry");
+  await assert.rejects(deploy(), {
+    name: "ScopeViolationError",
+    message: "The selected Credential Gateway does not support this source type.",
+  });
+  gateway.listSourceTypes = listSourceTypes;
+  assert.deepEqual((await deploy()).credentialSources, [
+    { sourceId: model.id, credentialGatewayId: gateway.id, sourceType: "openai" },
+    { sourceId: source.id, credentialGatewayId: gateway.id, sourceType: "registry" },
+  ]);
+
+  // Only a Sandbox Driver can carry listed sources into the runtime.
+  const unsandboxed = await fixture({ withoutSandbox: true });
+  await unsandboxed.makeReady();
+  const unsandboxedSource = await unsandboxed.controller.createCredentialSource(administrator, {
+    namespaceId: unsandboxed.namespace.id,
+    name: "registry",
+    type: "registry",
+    config: { host: "registry.example.com" },
+  });
+  const unsandboxedAgent = await unsandboxed.dedicatedAgent();
+  await unsandboxed.controller.updateAgent(administrator, {
+    namespaceId: unsandboxed.namespace.id,
+    agentId: unsandboxedAgent.id,
+    configurationId: unsandboxedAgent.configurationId,
+    harnessAuth: { method: "runtime" },
+    credentialSources: [{ sourceId: unsandboxedSource.id }],
+  });
+  unsandboxed.grantAgentSourceOperate(unsandboxedAgent, unsandboxedSource);
+  await assert.rejects(
+    unsandboxed.controller.deployAgent(
+      administrator,
+      { namespaceId: unsandboxed.namespace.id, agentId: unsandboxedAgent.id },
+      resolveApprovedDevelopmentHarness,
+    ),
+    {
+      name: "ResourceConflictError",
+      message: "Agent credential sources require a selected Sandbox Driver.",
+    },
+  );
 });
