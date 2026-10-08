@@ -1756,16 +1756,25 @@ test("startup rejects an invalid OpenShell gateway readiness wait", async (t) =>
  * which credential source owns it; the gateway may act only on its own source's provider.
  * Kept beside the OpenShell Sandbox cases: both members come from one OpenShell Backend.
  */
-function credentialGatewayOverProviders({ keepDeleted = false } = {}) {
+function credentialGatewayOverProviders({ keepDeleted = false, toolBinaries } = {}) {
   const providers = new Map();
+  const profiles = new Map();
+  const deletedProfiles = [];
   const calls = [];
   const client = {
-    async getProviderProfile() {
-      return undefined;
+    async getProviderProfile(_workspace, id) {
+      return profiles.get(id);
     },
-    async importProviderProfile() {},
-    async updateProviderProfile() {},
-    async deleteProviderProfile() {},
+    async importProviderProfile(_workspace, profile) {
+      profiles.set(profile.id, profile);
+    },
+    async updateProviderProfile(_workspace, profile) {
+      profiles.set(profile.id, profile);
+    },
+    async deleteProviderProfile(_workspace, id) {
+      deletedProfiles.push(id);
+      profiles.delete(id);
+    },
     async createProvider(provider) {
       calls.push(["createProvider", provider.name]);
       if (providers.has(provider.name)) {
@@ -1791,7 +1800,7 @@ function credentialGatewayOverProviders({ keepDeleted = false } = {}) {
     },
   };
   const driver = new OpenShellCredentialGatewayDriver(
-    { binaries: ["/usr/local/bin/codex"] },
+    { binaries: ["/usr/local/bin/codex"], ...(toolBinaries === undefined ? {} : { toolBinaries }) },
     {
       backend: {
         drivers: { credential_gateway: "credential-gateway-openshell" },
@@ -1813,7 +1822,9 @@ function credentialGatewayOverProviders({ keepDeleted = false } = {}) {
   });
   return {
     calls,
+    deletedProfiles,
     driver,
+    profiles,
     providers,
     source,
     context: (id) => ({ namespace, source: source(id), signal }),
@@ -1897,4 +1908,153 @@ test("OpenShell credential source removal fails while the provider survives dele
   await driver.registerSource(context(owner), input());
   await assert.rejects(driver.removeSource(context(owner)), /was not deleted/);
   assert.equal(providers.size, 1);
+});
+
+test("the OpenShell bearer-token type exists only with toolBinaries and validates its endpoint", async () => {
+  const modelOnly = credentialGatewayOverProviders();
+  assert.deepEqual(
+    (await modelOnly.driver.listSourceTypes({})).map(({ type }) => type),
+    ["openai"],
+  );
+  const tokenInput = (config) => ({ type: "bearer-token", config, secrets: { token: "t0ken" } });
+  const endpoint = { host: "api.example.com", env_var: "EXAMPLE_TOKEN" };
+  await assert.rejects(
+    modelOnly.driver.registerSource(
+      modelOnly.context("cs_00000000-0000-4000-8000-0000000000f0"),
+      tokenInput(endpoint),
+    ),
+    /does not support this type/,
+  );
+  assert.throws(
+    () =>
+      new OpenShellCredentialGatewayDriver(
+        { binaries: ["/usr/local/bin/codex"], toolBinaries: ["bin/curl"] },
+        {
+          backend: {
+            drivers: { credential_gateway: "credential-gateway-openshell" },
+            client: { clientForNamespace: () => ({}) },
+          },
+        },
+      ),
+    /toolBinaries must be a nonempty list of absolute paths/,
+  );
+
+  const { calls, context, deletedProfiles, driver, profiles, providers } =
+    credentialGatewayOverProviders({ toolBinaries: ["/usr/bin/curl"] });
+  assert.deepEqual(
+    (await driver.listSourceTypes({})).map(({ type }) => type),
+    ["openai", "bearer-token"],
+  );
+  // Every invalid endpoint or placeholder variable is refused before any gateway effect.
+  for (const config of [
+    { ...endpoint, host: "10.0.0.1" },
+    { ...endpoint, host: "API.example.com" },
+    { ...endpoint, host: "https://api.example.com" },
+    { ...endpoint, port: "0" },
+    { ...endpoint, port: "443x" },
+    { ...endpoint, port: "65536" },
+    { ...endpoint, path: "v1/**" },
+    { ...endpoint, path: "/v1?all" },
+    { ...endpoint, env_var: "example_token" },
+    { ...endpoint, env_var: "OPENAI_API_KEY" },
+    { ...endpoint, env_var: "PATH" },
+    { ...endpoint, env_var: "OPENCLAW_TOKEN" },
+    { ...endpoint, env_var: "CODEX_TOKEN" },
+    { host: "api.example.com" },
+  ]) {
+    await assert.rejects(
+      driver.registerSource(context("cs_00000000-0000-4000-8000-0000000000f1"), tokenInput(config)),
+      ScopeViolationError,
+      JSON.stringify(config),
+    );
+  }
+  assert.deepEqual(calls, []);
+  assert.equal(profiles.size, 0);
+
+  // Each bearer-token source owns a profile that only the tool binaries may use, at its endpoint.
+  const first = "cs_00000000-0000-4000-8000-0000000000f2";
+  const second = "cs_00000000-0000-4000-8000-0000000000f3";
+  assert.deepEqual(await driver.registerSource(context(first), tokenInput(endpoint)), {
+    state: "ready",
+  });
+  const provider = [...providers.values()].find(
+    ({ labels }) => labels["openclaw.dev/credential-source-id"] === first,
+  );
+  const profile = profiles.get(provider.type);
+  assert.ok(profile, "the provider's type names its own profile");
+  assert.equal(profile.id, provider.name);
+  assert.deepEqual(profile.binaries, ["/usr/bin/curl"]);
+  assert.equal(profile.inferenceCapable, false);
+  assert.deepEqual(profile.endpoints, [
+    { host: "api.example.com", port: 443, path: "/**", protocol: "rest" },
+  ]);
+  assert.deepEqual(
+    profile.credentials.map(({ name, envVars, authStyle, headerName }) => ({
+      name,
+      envVars,
+      authStyle,
+      headerName,
+    })),
+    [
+      {
+        name: "token",
+        envVars: ["EXAMPLE_TOKEN"],
+        authStyle: "bearer",
+        headerName: "authorization",
+      },
+    ],
+  );
+  // The model profile stays limited to the Harness binaries.
+  await driver.registerSource(context("cs_00000000-0000-4000-8000-0000000000f4"), {
+    type: "openai",
+    config: {},
+    secrets: { api_key: "synthetic-openai-key" },
+  });
+  assert.deepEqual(profiles.get("oce-openai").binaries, ["/usr/local/bin/codex"]);
+
+  // Two sources on one revision cannot share a placeholder variable.
+  await driver.registerSource(context(second), tokenInput(endpoint));
+  const bearer = (id) => ({
+    ...context(id).source,
+    type: "bearer-token",
+    config: endpoint,
+  });
+  const { namespace, signal } = context(first);
+  const revision = { harness: { id: "codex", mode: "dedicated" } };
+  await assert.rejects(
+    driver.attachForRevision({
+      namespace,
+      revision,
+      sources: [bearer(first), bearer(second)],
+      signal,
+    }),
+    /use the same environment variable/,
+  );
+  assert.equal(
+    (await driver.attachForRevision({ namespace, revision, sources: [bearer(first)], signal }))
+      .length,
+    1,
+  );
+  // A provider of another type under this source's name and labels is not this source's.
+  providers.set(provider.name, { ...provider, type: "oce-openai" });
+  assert.equal(
+    (await driver.sourceStatus({ namespace, source: bearer(first), signal })).state,
+    "failed",
+  );
+  providers.set(provider.name, provider);
+
+  // Removing a source removes its own profile, while another source of the type remains.
+  await driver.removeSource({ namespace, source: bearer(first), signal });
+  assert.deepEqual(deletedProfiles, [provider.name]);
+  assert.equal(profiles.has(provider.name), false);
+  assert.equal(profiles.size, 2);
+  // The shared model profile stays while another model source still uses it.
+  await driver.registerSource(context("cs_00000000-0000-4000-8000-0000000000f5"), {
+    type: "openai",
+    config: {},
+    secrets: { api_key: "synthetic-openai-key" },
+  });
+  await driver.removeSource(context("cs_00000000-0000-4000-8000-0000000000f4"));
+  assert.deepEqual(deletedProfiles, [provider.name]);
+  assert.equal(profiles.has("oce-openai"), true);
 });
