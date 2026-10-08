@@ -3419,6 +3419,8 @@ test("Codex runtime gates startup and readiness on a successful native authentic
                 },
                 spawn(_command, args, options) {
                   assert.ok(args.includes("app-server"));
+                  // Plugin reviewer validation must observe the admitted model, not a native default.
+                  assert.ok(args.includes('model="gpt-4.1"'));
                   const tokenDigest = args[args.indexOf("--ws-token-sha256") + 1];
                   assert.equal(tokenDigest, sha256("fixture-transport-token"));
                   assert.equal(Object.hasOwn(options.env, "APP_SERVER_TOKEN"), false);

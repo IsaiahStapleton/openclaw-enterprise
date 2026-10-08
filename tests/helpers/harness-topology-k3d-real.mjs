@@ -117,6 +117,16 @@ const {
 });
 
 async function slackApi(method, token, body = {}) {
+  assert.ok(
+    [
+      "auth.test",
+      "conversations.info",
+      "conversations.history",
+      "conversations.replies",
+      "chat.postMessage",
+    ].includes(method),
+    "unsupported Slack proof operation",
+  );
   const writesMessage = method === "chat.postMessage";
   const url = new URL(`https://slack.com/api/${method}`);
   if (!writesMessage) {
@@ -128,6 +138,9 @@ async function slackApi(method, token, body = {}) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       response = await fetch(url, {
+        // The credential file is an explicitly selected Slack token. Send it
+        // only to Slack's API, never to a redirected credential recipient.
+        redirect: "error",
         method: writesMessage ? "POST" : "GET",
         headers: {
           authorization: `Bearer ${token}`,
@@ -696,6 +709,35 @@ async function startInClusterControllers(
   workerIsolation.metadata.name = `${workerName}-isolation`;
   workerIsolation.spec.podSelector.matchLabels = workerLabels;
   manifests.items.push(workerIsolation);
+  const channelProxyUrl =
+    apiConfiguration.drivers.compute.configuration.runtime?.channels?.proxyUrl;
+  if (channelProxyUrl !== undefined) {
+    const channelProxy = new URL(channelProxyUrl);
+    assert.equal(
+      isIP(channelProxy.hostname),
+      4,
+      "the API Slack proxy requires an exact IPv4 address",
+    );
+    assert.notEqual(channelProxy.port, "", "the API Slack proxy requires an explicit port");
+    // Admission validates Slack credentials before deployment. Give only the API
+    // this approved proxy route; the worker keeps its existing isolation policy.
+    apiContainer.env.push({ name: "OCC_CHANNEL_DIRECTORY_PROXY_URL", value: channelProxyUrl });
+    manifests.items.push({
+      apiVersion: "networking.k8s.io/v1",
+      kind: "NetworkPolicy",
+      metadata: { name: `${name}-channel-proxy`, namespace: platformNamespace },
+      spec: {
+        podSelector: { matchLabels: labels },
+        policyTypes: ["Egress"],
+        egress: [
+          {
+            to: [{ ipBlock: { cidr: `${channelProxy.hostname}/32` } }],
+            ports: [{ protocol: "TCP", port: Number(channelProxy.port) }],
+          },
+        ],
+      },
+    });
+  }
   await applyManifest(JSON.stringify(manifests), {
     redactions: [databaseUrl, authSecret, workspaceGateway.apiKey],
   });
@@ -1074,7 +1116,18 @@ async function createApiSecret(request, namespaceId, name, value) {
     200,
     `Secret read failed with HTTP ${read.status} (${read.error?.code ?? "unknown"})`,
   );
-  assert.deepEqual(read.data, response.data);
+  // Detail reads include consumers; a newly created, unbound Secret has none.
+  assert.deepEqual(read.data, {
+    ...response.data,
+    consumers: {
+      agents: [],
+      configurations: [],
+      credentialSources: [],
+      provisioningRequests: [],
+      unreadable: 0,
+      truncated: false,
+    },
+  });
   return response.data;
 }
 
@@ -3207,25 +3260,26 @@ async function assertDedicatedSkillSources(topology) {
 }
 
 async function assertGatewayEffectiveDefaultModel(context, topology, expectedModel) {
-  const actualModel = JSON.parse(
-    await execNode(
-      topology.gatewayPlacement,
+  // Read through the shipped CLI instead of a removed plugin SDK export.
+  const model = JSON.parse(
+    await kubectl(
+      "exec",
       topology.gatewayPod.metadata.name,
-      `
-    (async () => {
-      const { loadConfig } = await import("openclaw/plugin-sdk/config-runtime");
-      const model = loadConfig({ pin: false }).agents?.defaults?.model;
-      const primary = typeof model === "string" ? model : model?.primary;
-      if (typeof primary !== "string" || !primary.trim()) {
-        throw new Error("Effective runtime config did not expose agents.defaults.model");
-      }
-      process.stdout.write(JSON.stringify(primary));
-    })().catch(error => {
-      console.error(error);
-      process.exit(1);
-    });
-  `,
+      "--namespace",
+      topology.gatewayPlacement,
+      "--",
+      "node",
+      "/app/openclaw.mjs",
+      "config",
+      "get",
+      "agents.defaults.model",
+      "--json",
     ),
+  );
+  const actualModel = typeof model === "string" ? model : model?.primary;
+  assert.ok(
+    typeof actualModel === "string" && actualModel.trim(),
+    "Effective runtime config did not expose agents.defaults.model",
   );
   assert.equal(
     actualModel,
