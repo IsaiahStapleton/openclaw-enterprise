@@ -157,9 +157,10 @@ an account does not issue its credential or change the model, Harness, or Backen
 or provisioning plans. It rolls back without converting or deleting those
 records. Changing the current Agent binding does not clear historical revisions;
 retained legacy state must be cleared before the upgrade can proceed. Delete each
-affected Agent, which also deletes its revisions, and create it again after the
-upgrade. This is an intentional development-state break; in-place conversion is
-unsupported.
+affected Agent, which also deletes its revisions and provisioning requests, and
+create it again after the upgrade. Agent deletion does not remove a provisioning
+request that failed before it created an Agent. This is an intentional
+development-state break; in-place conversion is unsupported.
 
 For dedicated Codex with a Credential Gateway, use
 `{ "method": "credential_source", "sourceId": "cs_…" }`; see
