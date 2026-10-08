@@ -2308,6 +2308,14 @@ test(
     ]) {
       await assert.rejects(render({ ...slackProxyValues, ...override }), /slackProxy/);
     }
+    await assert.rejects(
+      render(slackProxyValues, { strings: { "slackProxy.port": "010" } }),
+      /slackProxy\.port must be an integer TCP port/,
+    );
+    await assert.rejects(
+      render(slackProxyValues, { strings: { "slackProxy.port": "9223372036854775808" } }),
+      /slackProxy\.port must be an integer TCP port/,
+    );
   },
 );
 
