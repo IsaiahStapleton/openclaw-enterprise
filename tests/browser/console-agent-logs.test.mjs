@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { createConsoleAppFixture } from "../helpers/console-app.mjs";
+import { grantRole } from "../helpers/iam-grants.mjs";
 import { createRuntimeLogComputeDriver } from "../helpers/runtime-logs.mjs";
 import {
   apiRequests,
@@ -124,6 +125,67 @@ test("the Logs tab shows runtime status, sanitized output and follows with a cur
   await page.goto(detailUrl(fixture, namespace.id, agent.id, "draft", "logs").href);
   await page.getByRole("button", { name: "Configuration", exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Logs", exact: true }).count(), 0);
+});
+
+test("invisible and bidirectional characters in log text show as visible escapes", async (t) => {
+  const { fixture, computeDriver, namespace, agent, revisionId } = await logsFixture(t);
+  computeDriver.state.events = [
+    {
+      type: "Warning",
+      container: "gateway",
+      reason: "BackOff",
+      message: "pulling report\u202egnp.exe",
+      count: 1,
+      lastObservedAt: "2026-09-30T11:59:00Z",
+    },
+  ];
+  computeDriver.state.lines = [
+    // U+202E would display the rest of the line reversed ("invoice for exe.pdf").
+    line(1, "invoice for \u202efdp.exe, zero\u200bwidth and \u2066isolate\u2069 end"),
+    line(
+      2,
+      '{"event":"runtime.startup_phase","container":"gateway","phase":"conf\u202eig","outcome":"ok","ms":12,"sinceStartMs":40}',
+    ),
+    line(3, "plain text, emoji \u{1f600} and \u6f22\u5b57 stay as they are"),
+    // A tag character hides ASCII outside the Basic Multilingual Plane.
+    line(4, "tagged\u{e0041} line"),
+  ];
+
+  const { page } = await newPage(t, fixture);
+  const url = detailUrl(fixture, namespace.id, agent.id, revisionId, "logs");
+  await login(page, fixture, url);
+
+  const pane = page.getByRole("log", { name: "Runtime log output" });
+  const text = pane.locator(".log-message", { hasText: "invoice for" });
+  await text.waitFor();
+  assert.equal(
+    await text.textContent(),
+    "invoice for \\u202efdp.exe, zero\\u200bwidth and \\u2066isolate\\u2069 end",
+  );
+  // The filter matches what the row shows.
+  assert.match(
+    await pane.locator(".log-row", { hasText: "invoice for" }).getAttribute("data-search"),
+    /invoice for \\u202efdp\.exe/,
+  );
+  const phase = pane.locator(".log-row", { hasText: "runtime.startup_phase" });
+  await phase.locator("summary").click();
+  await phase.locator("dd", { hasText: "conf" }).waitFor();
+  assert.equal(await phase.locator("dd", { hasText: "conf" }).textContent(), "conf\\u202eig");
+  assert.equal(
+    await pane.locator(".log-message", { hasText: "plain text" }).textContent(),
+    "plain text, emoji \u{1f600} and \u6f22\u5b57 stay as they are",
+  );
+  assert.equal(
+    await pane.locator(".log-message", { hasText: "tagged" }).textContent(),
+    "tagged\\U000e0041 line",
+  );
+  // Pasting the original text into the filter still finds the escaped row.
+  await page.getByLabel("Filter", { exact: true }).fill("for \u202efdp");
+  await pane.locator(".log-row", { hasText: "invoice for" }).waitFor({ state: "visible" });
+  await page
+    .locator(".runtime-pod")
+    .getByText("gateway · BackOff: pulling report\\u202egnp.exe")
+    .waitFor();
 });
 
 test("startup warnings on a Ready Pod without restarts read as history", async (t) => {
@@ -323,23 +385,16 @@ test("an operator without administer sees status but no log text and is never re
   const { fixture, computeDriver, namespace, agent, revisionId } = await logsFixture(t);
   computeDriver.state.lines = [line(1, "operator must not see this")];
   const operator = await fixture.createAccountWithPolicy("runtime-operator", (principal) => {
-    fixture.policy.roles.push({
+    grantRole(fixture.policy, principal.id, {
       id: "role-console-runtime-operator",
+      bindingId: "binding-console-runtime-operator",
       namespaceId: namespace.id,
-      permissions: [
-        { action: "read", resourceKind: "namespace" },
-        { action: "read", resourceKind: "agent" },
-        { action: "operate", resourceKind: "agent" },
-        { action: "read", resourceKind: "configuration" },
-        { action: "read", resourceKind: "agent_revision" },
-      ],
-    });
-    fixture.policy.bindings.push({
-      id: "binding-console-runtime-operator",
-      namespaceId: namespace.id,
-      subjectKind: "identity",
-      subjectId: principal.id,
-      roleId: "role-console-runtime-operator",
+      permissions: {
+        namespace: ["read"],
+        agent: ["read", "operate"],
+        configuration: ["read"],
+        agent_revision: ["read"],
+      },
     });
   });
   const { page } = await newPage(t, fixture);
@@ -373,23 +428,16 @@ test("a log reader without operate reads log text in the Logs tab without runtim
   computeDriver.state.lines = [line(1, "log reader can see this")];
   computeDriver.state.previousLines = [line(0, "output before the restart")];
   const reader = await fixture.createAccountWithPolicy("runtime-log-reader", (principal) => {
-    fixture.policy.roles.push({
+    grantRole(fixture.policy, principal.id, {
       id: "role-console-runtime-log-reader",
+      bindingId: "binding-console-runtime-log-reader",
       namespaceId: namespace.id,
-      permissions: [
-        { action: "read", resourceKind: "namespace" },
-        { action: "read", resourceKind: "agent" },
-        { action: "read_logs", resourceKind: "agent" },
-        { action: "read", resourceKind: "configuration" },
-        { action: "read", resourceKind: "agent_revision" },
-      ],
-    });
-    fixture.policy.bindings.push({
-      id: "binding-console-runtime-log-reader",
-      namespaceId: namespace.id,
-      subjectKind: "identity",
-      subjectId: principal.id,
-      roleId: "role-console-runtime-log-reader",
+      permissions: {
+        namespace: ["read"],
+        agent: ["read", "read_logs"],
+        configuration: ["read"],
+        agent_revision: ["read"],
+      },
     });
   });
   const { page } = await newPage(t, fixture);
@@ -667,22 +715,16 @@ test("the Gateway hint skips a rollout's old Harness Pod and covers a Harness wi
 test("a reader without operate learns what log text needs and is asked for status once per page", async (t) => {
   const { fixture, namespace, agent, revisionId } = await logsFixture(t);
   const reader = await fixture.createAccountWithPolicy("runtime-reader", (principal) => {
-    fixture.policy.roles.push({
+    grantRole(fixture.policy, principal.id, {
       id: "role-console-runtime-reader",
+      bindingId: "binding-console-runtime-reader",
       namespaceId: namespace.id,
-      permissions: [
-        { action: "read", resourceKind: "namespace" },
-        { action: "read", resourceKind: "agent" },
-        { action: "read", resourceKind: "configuration" },
-        { action: "read", resourceKind: "agent_revision" },
-      ],
-    });
-    fixture.policy.bindings.push({
-      id: "binding-console-runtime-reader",
-      namespaceId: namespace.id,
-      subjectKind: "identity",
-      subjectId: principal.id,
-      roleId: "role-console-runtime-reader",
+      permissions: {
+        namespace: ["read"],
+        agent: ["read"],
+        configuration: ["read"],
+        agent_revision: ["read"],
+      },
     });
   });
   const { page } = await newPage(t, fixture);
@@ -711,22 +753,16 @@ test("a reader without operate learns what log text needs and is asked for statu
 test("a status denial for one operator does not carry over to the next sign-in on the tab", async (t) => {
   const { fixture, namespace, agent, revisionId } = await logsFixture(t);
   const reader = await fixture.createAccountWithPolicy("runtime-switch-reader", (principal) => {
-    fixture.policy.roles.push({
+    grantRole(fixture.policy, principal.id, {
       id: "role-console-runtime-switch-reader",
+      bindingId: "binding-console-runtime-switch-reader",
       namespaceId: namespace.id,
-      permissions: [
-        { action: "read", resourceKind: "namespace" },
-        { action: "read", resourceKind: "agent" },
-        { action: "read", resourceKind: "configuration" },
-        { action: "read", resourceKind: "agent_revision" },
-      ],
-    });
-    fixture.policy.bindings.push({
-      id: "binding-console-runtime-switch-reader",
-      namespaceId: namespace.id,
-      subjectKind: "identity",
-      subjectId: principal.id,
-      roleId: "role-console-runtime-switch-reader",
+      permissions: {
+        namespace: ["read"],
+        agent: ["read"],
+        configuration: ["read"],
+        agent_revision: ["read"],
+      },
     });
   });
   const { page } = await newPage(t, fixture);
